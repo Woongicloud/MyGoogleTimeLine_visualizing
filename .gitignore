@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+output/frames/*
+!output/frames/.gitkeep
+output/videos/*
+!output/videos/.gitkeep
+.env
+.DS_Store
