@@ -1,0 +1,227 @@
+{
+  "timelineEdits": [{
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "position": {
+          "point": {
+            "latE7": 376138424,
+            "lngE7": 1269321056
+          },
+          "accuracyMm": 100000,
+          "altitudeMeters": 0.0,
+          "source": "CELL",
+          "timestamp": "2025-12-14T14:58:16.578Z",
+          "speedMetersPerSecond": 0.0
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:58:16.633Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "wifiScan": {
+          "deliveryTime": "2025-12-14T14:58:16.578Z"
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:58:16.578Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "position": {
+          "point": {
+            "latE7": 376138424,
+            "lngE7": 1269321056
+          },
+          "accuracyMm": 100000,
+          "altitudeMeters": 0.0,
+          "source": "CELL",
+          "timestamp": "2025-12-14T14:56:01.612Z",
+          "speedMetersPerSecond": 0.0
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:56:01.731Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "wifiScan": {
+          "deliveryTime": "2025-12-14T14:56:01.612Z"
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:56:01.612Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "position": {
+          "point": {
+            "latE7": 376138424,
+            "lngE7": 1269321056
+          },
+          "accuracyMm": 100000,
+          "altitudeMeters": 0.0,
+          "source": "CELL",
+          "timestamp": "2025-12-14T14:50:53.411Z",
+          "speedMetersPerSecond": 0.0
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:50:53.472Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "wifiScan": {
+          "deliveryTime": "2025-12-14T14:50:53.411Z"
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:50:53.411Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "position": {
+          "point": {
+            "latE7": 376138424,
+            "lngE7": 1269321056
+          },
+          "accuracyMm": 100000,
+          "altitudeMeters": 0.0,
+          "source": "CELL",
+          "timestamp": "2025-12-14T14:49:41.034Z",
+          "speedMetersPerSecond": 0.0
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:49:41.056Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "wifiScan": {
+          "deliveryTime": "2025-12-14T14:49:41.034Z"
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:49:41.034Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "position": {
+          "point": {
+            "latE7": 376138424,
+            "lngE7": 1269321056
+          },
+          "accuracyMm": 100000,
+          "altitudeMeters": 0.0,
+          "source": "CELL",
+          "timestamp": "2025-12-14T14:49:11.033Z",
+          "speedMetersPerSecond": 0.0
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:49:11.066Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "wifiScan": {
+          "deliveryTime": "2025-12-14T14:49:11.033Z"
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:49:11.033Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "position": {
+          "point": {
+            "latE7": 376138424,
+            "lngE7": 1269321056
+          },
+          "accuracyMm": 100000,
+          "altitudeMeters": 0.0,
+          "source": "CELL",
+          "timestamp": "2025-12-14T14:47:10.967Z",
+          "speedMetersPerSecond": 0.0
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:47:11.049Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "wifiScan": {
+          "deliveryTime": "2025-12-14T14:47:10.967Z"
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:47:10.967Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "position": {
+          "point": {
+            "latE7": 376139645,
+            "lngE7": 1269317696
+          },
+          "accuracyMm": 100000,
+          "altitudeMeters": 0.0,
+          "source": "CELL",
+          "timestamp": "2025-12-14T14:43:47.031Z",
+          "speedMetersPerSecond": 0.0
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:43:47.123Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "wifiScan": {
+          "deliveryTime": "2025-12-14T14:43:47.031Z"
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:43:47.031Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "position": {
+          "point": {
+            "latE7": 376139645,
+            "lngE7": 1269317696
+          },
+          "accuracyMm": 100000,
+          "altitudeMeters": 0.0,
+          "source": "CELL",
+          "timestamp": "2025-12-14T14:38:47.014Z",
+          "speedMetersPerSecond": 0.0
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:38:47.051Z"
+    }
+  }, {
+    "deviceId": "1415321345",
+    "rawSignal": {
+      "signal": {
+        "wifiScan": {
+          "deliveryTime": "2025-12-14T14:38:47.014Z"
+        }
+      },
+      "additionalTimestamp": "2025-12-14T14:38:47.014Z"
+    }
+  }]
+}
