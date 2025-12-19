@@ -1,0 +1,21 @@
+name: timeline-visualizer
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pandas
+  - numpy
+  - geopandas
+  - shapely
+  - matplotlib
+  - pyproj
+  - requests
+  - tqdm
+  - contextily
+  - pillow
+  - folium
+  - ffmpeg
+  - pip
+  - pip:
+      - ffmpeg-python
