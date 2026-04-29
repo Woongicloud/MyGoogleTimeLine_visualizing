@@ -1,0 +1,20 @@
+# Phase 1 - parsing
+ijson>=3.5.0
+
+# Phase 2 - rendering
+Pillow>=10.0.0
+requests>=2.32.0
+python-dotenv>=1.0.0
+staticmap>=0.5.4
+pyyaml>=6.0
+
+# Phase 3 - video encoding (bundles FFmpeg, no system install needed)
+imageio-ffmpeg>=0.5.1
+
+# Phase 3 (planned) - video encoding
+# opencv-python>=4.9.0
+
+# Backend (planned)
+# fastapi>=0.111.0
+# celery>=5.4.0
+# redis>=5.0.0

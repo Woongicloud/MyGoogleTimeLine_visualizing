@@ -1,0 +1,84 @@
+# render_config.yml
+# Google Timeline Visualizer - 렌더링 설정 파일
+#
+# 이 파일의 값이 기본값이 됩니다. CLI 플래그(--map, --fps 등)가 이 값을 덮어씁니다.
+# 파일을 삭제하면 내장 기본값이 사용됩니다.
+# API 키는 .env 파일에 저장하세요 (절대 커밋 금지).
+
+# ── 지도 배경 타일 ────────────────────────────────────────────────────────────
+map:
+  # 타일 공급자 선택
+  # 무료 (API 키 없음): osm | cartodb-voyager | cartodb-light | cartodb-dark
+  # 무료 (회원가입 필요): stadia-dark | stadia-light
+  # 프리미엄: mapbox
+  # 사용자 정의 XYZ URL: custom (아래 custom_url 입력)
+  provider: cartodb-voyager
+
+  # provider: custom 일 때 XYZ 타일 URL ({z}/{x}/{y} 포함)
+  custom_url: ""
+
+  # API 키 (.env 파일의 값이 여기보다 우선합니다)
+  mapbox_token: ""      # .env: MAPBOX_TOKEN=pk.eyJ1...
+  stadia_api_key: ""    # .env: STADIA_API_KEY=...
+
+# ── 출력 해상도 ───────────────────────────────────────────────────────────────
+canvas:
+  width:  1280           # 가로 픽셀 (권장: 1280 / 1920)
+  height:  720           # 세로 픽셀 (권장: 720 / 1080)
+  bbox_padding:      0.05   # GPS 범위 여백 비율 (5% = 0.05)
+  bbox_min_padding_deg: 0.005  # 최소 여백 (단위: 도)
+
+# ── 잔상(trail) 설정 ─────────────────────────────────────────────────────────
+trail:
+  length: 300            # 화면에 표시할 최대 이전 포인트 수
+                         # 클수록 긴 궤적, 작을수록 짧고 선명한 효과
+  alpha_min: 60          # 가장 오래된 포인트 투명도 (0=완전 투명, 255=불투명)
+  alpha_max: 255         # 현재 포인트 투명도
+  current_point_scale: 2 # 현재 위치 점 크기 배율 (기본 반경 × 이 값)
+  outline_color: [255, 255, 255]  # 현재 위치 외곽선 색상 (RGB)
+  outline_alpha: 200              # 현재 위치 외곽선 투명도
+  outline_extra_radius: 3         # 외곽선 추가 반경 (px)
+
+# ── 교통수단별 점 색상 (RGB) ──────────────────────────────────────────────────
+colors:
+  stationary: [100, 100, 100]   # 회색   — 정지 상태
+  walking:    [ 34, 197,  94]   # 초록   — 도보
+  cycling:    [ 59, 130, 246]   # 파랑   — 자전거
+  vehicle:    [249, 115,  22]   # 주황   — 차량 (일반 도로)
+  highway:    [239,  68,  68]   # 빨강   — 고속도로
+  flight:     [168,  85, 247]   # 보라   — 비행기
+
+# ── 교통수단별 점 반경 (px, 기본 크기 기준) ───────────────────────────────────
+radius:
+  stationary: 2
+  walking:    3
+  cycling:    4
+  vehicle:    4
+  highway:    5
+  flight:     6
+
+# ── HUD (날짜/시각 + 진행 바) ─────────────────────────────────────────────────
+hud:
+  enabled:       true    # false 로 설정하면 HUD 전체 숨김
+  banner_height: 38      # 상단 배너 높이 (px)
+  banner_alpha:  150     # 배너 배경 투명도 (0~255)
+  font_size:     20      # 텍스트 크기 (pt)
+  font_path:     ""      # 폰트 파일 절대 경로 (비우면 arial.ttf 또는 기본 폰트)
+
+  progress_bar:
+    enabled:       true
+    color:         [99, 202, 255]    # 진행 바 채움 색 (RGB)
+    alpha:         200
+    outline_color: [180, 180, 180]   # 진행 바 테두리 색
+    outline_alpha: 180
+    margin_right:  12    # 오른쪽 여백 (px)
+    width:         200   # 진행 바 총 너비 (px)
+    height:        16    # 진행 바 높이 (px)
+    top_offset:    11    # 배너 상단으로부터 Y 오프셋 (px)
+
+# ── 렌더링 기본값 ─────────────────────────────────────────────────────────────
+render:
+  duration_sec: 60   # 기본 출력 영상 길이 (초) — CLI --duration 으로 덮어씀
+  fps:          30   # 기본 프레임 레이트 — CLI --fps 로 덮어씀
+  db_path:      "timeline.db"   # SQLite DB 경로
+  output_root:  "output"        # PNG 시퀀스 출력 루트 폴더

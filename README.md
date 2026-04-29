@@ -1,3 +1,345 @@
-# MyGoogleTimeLine_visualizing
+# MyGoogleTimeLine Visualizer
 
-test
+Google Takeout 타임라인 JSON을 파싱해 월별 이동 동선을 지도 위에 애니메이션으로 시각화하고 MP4·GIF로 출력하는 도구입니다.
+
+```
+[Phase 1] JSON 파싱 → SQLite DB
+[Phase 2] GPS 트랙 → PNG 프레임 시퀀스  ← 현재 단계
+[Phase 3] PNG 시퀀스 → MP4 / GIF        (예정)
+```
+
+---
+
+## 설치
+
+**요구사항:** Python 3.11+
+
+```bash
+git clone <repo-url>
+cd MyGoogleTimeLine_visualizing
+pip install -r requirements.txt
+```
+
+---
+
+## 빠른 시작
+
+### 1. 타임라인 JSON 파싱
+
+Google Takeout에서 받은 JSON 파일을 `data/` 폴더에 넣고:
+
+```bash
+python script/timeline_parser.py "data/Timeline Edits.json"
+```
+
+파싱 결과 확인:
+```bash
+python script/timeline_parser.py --summary
+```
+
+### 2. 프레임 렌더링
+
+```bash
+# 2025년 12월 전체
+python script/frame_renderer.py 2025-12
+
+# 특정 날짜 범위
+python script/frame_renderer.py 2025-12-20~2025-12-31
+
+# 지도 스타일 변경
+python script/frame_renderer.py 2025-12 --map cartodb-light
+
+# 영상 길이·fps 조정
+python script/frame_renderer.py 2025-08 --duration 30 --fps 24
+```
+
+출력: `output/2025-12/frames/frame_000000.png` ~ `frame_001799.png`
+
+---
+
+## 지도 공급자 가이드
+
+### 무료 — API 키 불필요
+
+| 이름 | `--map` 값 | 배경 스타일 | 특징 |
+|------|-----------|------------|------|
+| CartoDB Voyager | `cartodb-voyager` | 컬러 (기본값) | 도로·지명 선명, GPS 점과 대비 좋음 |
+| CartoDB Light | `cartodb-light` | 밝은 회색 | 깔끔, 낮 시간대 데이터에 적합 |
+| CartoDB Dark | `cartodb-dark` | 어두운 검정 | 네온 스타일, 야간 데이터 강조 |
+| OpenStreetMap | `osm` | 표준 컬러 | 상세 지명, 데이터 풍부 |
+
+```bash
+# 예시
+python script/frame_renderer.py 2025-12 --map cartodb-light
+python script/frame_renderer.py 2025-12 --map osm
+```
+
+---
+
+### Stadia Maps (무료 — 회원가입 필요)
+
+Stadia Maps는 무료 플랜으로 월 200,000 타일 요청을 제공합니다.
+
+**가입 절차:**
+
+1. [client.stadiamaps.com](https://client.stadiamaps.com/signup/) 에서 계정 생성
+2. 로그인 후 **Manage Properties** → **Add Property** (도메인/앱 이름 입력)
+3. Property 생성 후 **API Keys** 탭 → **Create API Key**
+4. 생성된 키를 복사
+
+**설정:**
+```bash
+# .env 파일에 추가
+STADIA_API_KEY=your_api_key_here
+```
+
+| 이름 | `--map` 값 | 스타일 |
+|------|-----------|--------|
+| Stadia Dark | `stadia-dark` | 부드러운 다크 테마 |
+| Stadia Light | `stadia-light` | 부드러운 라이트 테마 |
+
+> **참고:** Stadia API 키 없이 `stadia-dark`를 사용하면 일부 지역에서 타일 로드가 제한될 수 있습니다.
+
+---
+
+### Mapbox (월 50,000 요청 무료)
+
+Mapbox는 고품질 벡터 지도를 제공하며 다양한 스타일을 지원합니다.
+
+**가입 절차:**
+
+1. [account.mapbox.com](https://account.mapbox.com/auth/signup/) 에서 계정 생성
+2. 대시보드 → **Tokens** → **Create a token**
+3. Scopes에서 `styles:tiles` 체크 → **Create token**
+4. 생성된 토큰(`pk.eyJ1...`)을 복사
+
+**설정:**
+```bash
+# .env 파일에 추가
+MAPBOX_TOKEN=pk.eyJ1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+```bash
+# 사용법 (기본 스타일: mapbox/dark-v11)
+python script/frame_renderer.py 2025-12 --map mapbox
+
+# 다른 Mapbox 스타일 사용 (render_config.yml에서 custom_url에 스타일 ID 입력)
+# custom_url: "mapbox/streets-v12"
+```
+
+**Mapbox 주요 스타일 ID:**
+
+| 스타일 | ID |
+|--------|-----|
+| Dark (기본) | `mapbox/dark-v11` |
+| Streets | `mapbox/streets-v12` |
+| Outdoors | `mapbox/outdoors-v12` |
+| Satellite | `mapbox/satellite-v9` |
+| Light | `mapbox/light-v11` |
+
+---
+
+### 커스텀 XYZ 타일
+
+표준 XYZ 포맷(`{z}/{x}/{y}`)을 지원하는 어떤 타일 서버든 사용 가능합니다:
+
+```bash
+python script/frame_renderer.py 2025-12 \
+  --map "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+```
+
+---
+
+## 설정 파일 (`render_config.yml`)
+
+프로젝트 루트의 `render_config.yml`에서 모든 시각화 옵션을 조정할 수 있습니다.
+
+### 전체 옵션 표
+
+#### `map` 섹션
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `provider` | string | `cartodb-voyager` | 타일 공급자 이름 |
+| `custom_url` | string | `""` | 커스텀 XYZ URL (provider=custom 일 때) |
+| `mapbox_token` | string | `""` | Mapbox 토큰 (.env 우선) |
+| `stadia_api_key` | string | `""` | Stadia API 키 (.env 우선) |
+
+#### `canvas` 섹션
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `width` | int | `1280` | 출력 가로 픽셀 |
+| `height` | int | `720` | 출력 세로 픽셀 |
+| `bbox_padding` | float | `0.05` | GPS 범위 여백 비율 |
+
+#### `trail` 섹션
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `length` | int | `300` | 화면 표시 최대 이전 포인트 수 |
+| `alpha_min` | int | `60` | 가장 오래된 점 투명도 (0~255) |
+| `alpha_max` | int | `255` | 현재 위치 점 투명도 |
+| `current_point_scale` | int | `2` | 현재 위치 점 크기 배율 |
+| `outline_color` | list | `[255,255,255]` | 현재 위치 외곽선 색 (RGB) |
+| `outline_alpha` | int | `200` | 외곽선 투명도 |
+
+#### `colors` 섹션 (RGB)
+
+| 교통수단 | 기본 색 | hex |
+|---------|---------|-----|
+| `stationary` | `[100, 100, 100]` | #646464 (회색) |
+| `walking` | `[34, 197, 94]` | #22c55e (초록) |
+| `cycling` | `[59, 130, 246]` | #3b82f6 (파랑) |
+| `vehicle` | `[249, 115, 22]` | #f97316 (주황) |
+| `highway` | `[239, 68, 68]` | #ef4444 (빨강) |
+| `flight` | `[168, 85, 247]` | #a855f7 (보라) |
+
+#### `radius` 섹션 (픽셀)
+
+| 교통수단 | 기본 반경 |
+|---------|---------|
+| `stationary` | 2 |
+| `walking` | 3 |
+| `cycling` / `vehicle` | 4 |
+| `highway` | 5 |
+| `flight` | 6 |
+
+#### `hud` 섹션
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `enabled` | bool | `true` | HUD 전체 표시 여부 |
+| `banner_height` | int | `38` | 상단 배너 높이 (px) |
+| `banner_alpha` | int | `150` | 배너 배경 투명도 |
+| `font_size` | int | `20` | 날짜 텍스트 크기 (pt) |
+| `font_path` | string | `""` | 커스텀 폰트 파일 경로 |
+
+#### `render` 섹션
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `duration_sec` | int | `60` | 기본 출력 영상 길이 (초) |
+| `fps` | int | `30` | 기본 프레임 레이트 |
+
+---
+
+## CLI 레퍼런스
+
+```
+python script/frame_renderer.py <period> [옵션]
+
+인자:
+  period          기간 (예: 2025-12  또는  2025-12-20~2025-12-31)
+
+옵션:
+  --map PROVIDER  지도 공급자 또는 커스텀 XYZ URL
+  --config FILE   설정 파일 경로 (기본: ./render_config.yml)
+  --output DIR    PNG 출력 폴더
+  --duration N    영상 길이 초 (CLI > render_config.yml > 내장 기본값 순)
+  --fps N         프레임 레이트
+  --trail N       잔상 최대 점 개수
+
+적용 우선순위:
+  CLI 플래그 > render_config.yml > 내장 기본값
+  API 키: .env 파일 > render_config.yml
+```
+
+---
+
+## 커스터마이징 예시
+
+### 밝은 지도 + 빨간 동선
+
+```yaml
+# render_config.yml
+map:
+  provider: cartodb-light
+
+colors:
+  walking:  [220, 50,  50]
+  vehicle:  [180, 30,  30]
+  highway:  [120, 20,  20]
+```
+
+### 야간 강조 (짧은 잔상)
+
+```yaml
+map:
+  provider: cartodb-dark
+
+trail:
+  length: 100
+  alpha_min: 20
+```
+
+### HUD 비활성화
+
+```yaml
+hud:
+  enabled: false
+```
+
+---
+
+## 출력 구조
+
+```
+output/
+  2025-12/
+    tile_cartodb-voyager.png   # 배경 타일 캐시 (공급자별 자동 구분)
+    frames/
+      frame_000000.png
+      frame_000001.png
+      ...
+      frame_001799.png         # 60초 × 30fps = 1,800장
+```
+
+---
+
+## Phase 3 예고 — FFmpeg 인코딩
+
+Phase 3 완성 전 수동으로 인코딩하려면:
+
+```bash
+# MP4
+ffmpeg -r 30 -i output/2025-12/frames/frame_%06d.png \
+  -c:v libx264 -pix_fmt yuv420p -crf 18 output/2025-12.mp4
+
+# GIF (팔레트 최적화)
+ffmpeg -r 30 -i output/2025-12/frames/frame_%06d.png \
+  -vf "fps=15,scale=960:-1:flags=lanczos,palettegen" palette.png
+ffmpeg -r 30 -i output/2025-12/frames/frame_%06d.png \
+  -i palette.png -filter_complex "fps=15,scale=960:-1:flags=lanczos[x];[x][1:v]paletteuse" \
+  output/2025-12.gif
+```
+
+---
+
+## 트러블슈팅
+
+### "해당 기간의 데이터가 없습니다"
+
+```bash
+python script/timeline_parser.py --summary
+```
+파싱된 월 목록을 확인 후 해당 기간으로 렌더링하세요.
+
+### 타일이 단색(#1e1e1e)으로 표시됨
+
+네트워크 연결 확인 후 다른 공급자로 전환:
+```bash
+python script/frame_renderer.py 2025-12 --map osm
+```
+
+### Mapbox 401 오류
+
+`.env` 파일에 `MAPBOX_TOKEN`이 올바르게 설정되었는지 확인:
+```bash
+python -c "import os; from dotenv import load_dotenv; load_dotenv(); print(os.getenv('MAPBOX_TOKEN', 'NOT SET'))"
+```
+
+### 지도 배경이 캐시된 이전 공급자로 표시됨
+
+`output/<period>/tile_*.png` 파일들을 삭제하면 다음 실행 시 재다운로드됩니다.
+공급자를 바꾸면 `tile_<provider이름>.png`로 자동 구분되므로 일반적으로 문제없습니다.

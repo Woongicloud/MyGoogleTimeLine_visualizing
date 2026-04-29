@@ -1,0 +1,30 @@
+# Prerequisites
+*.d
+
+# Compiled Python modules
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs and Editors
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+.DS_Store
+
+# User Specific Exclusions (Requested)
+data/
+db/
+output/
+*.db
