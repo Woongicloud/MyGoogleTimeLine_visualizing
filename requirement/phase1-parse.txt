@@ -1,0 +1,5 @@
+# Phase 1 - JSON Parsing
+# Streaming parser for large Google Takeout timeline JSON.
+# Install: pip install -r requirement/phase1-parse.txt
+
+ijson>=3.5.0

@@ -87,19 +87,40 @@ def check_ffmpeg() -> str:
 # ──────────────────────────────────────────
 
 def get_frame_count(frames_dir: Path, period_str: str) -> int:
-    """PNG 프레임 개수 확인. 없으면 종료."""
+    """
+    PNG 프레임 개수 확인.
+    1차: glob() 디렉터리 리스팅
+    2차: 순차 파일 존재 확인 (Google Drive 등 디렉터리 락 우회)
+    """
     if not frames_dir.exists():
         log.error("프레임 디렉터리 없음: %s", frames_dir)
         log.error("먼저 렌더러를 실행하세요:")
         log.error("  python script/frame_renderer.py %s", period_str)
         sys.exit(1)
 
-    count = len(sorted(frames_dir.glob("frame_*.png")))
+    # 1차: glob 시도
+    try:
+        count = len(list(frames_dir.glob("frame_*.png")))
+        if count > 0:
+            log.info("프레임 확인: %d장 ← %s", count, frames_dir)
+            return count
+    except (PermissionError, OSError):
+        pass
+
+    # 2차: 순차 파일 검사 (디렉터리 락 우회)
+    log.info("디렉터리 리스팅 불가 → 순차 파일 확인 중...")
+    count = 0
+    while (frames_dir / f"frame_{count:06d}.png").exists():
+        count += 1
+        if count > 50_000:   # 안전 상한
+            log.warning("프레임 50,000장 초과 — 검사 중단")
+            break
+
     if count == 0:
         log.error("프레임 파일 없음: %s", frames_dir)
         sys.exit(1)
 
-    log.info("프레임 확인: %d장 ← %s", count, frames_dir)
+    log.info("프레임 확인: %d장 (순차 검사) ← %s", count, frames_dir)
     return count
 
 

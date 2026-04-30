@@ -1,0 +1,12 @@
+# Google Timeline Visualizer - Base Requirements
+# Full pipeline (Phase 1 + 2 + 3) all-in-one install.
+# Install: pip install -r requirement/base.txt
+#
+# For phase-specific minimal installs, see:
+#   requirement/phase1-parse.txt    (parsing only)
+#   requirement/phase2-render.txt   (rendering only)
+#   requirement/phase3-encode.txt   (encoding only)
+
+-r phase1-parse.txt
+-r phase2-render.txt
+-r phase3-encode.txt

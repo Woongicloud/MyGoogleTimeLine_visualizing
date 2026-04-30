@@ -1,0 +1,9 @@
+# Phase 2 - Frame Rendering
+# PIL drawing + map tile fetching + YAML config.
+# Install: pip install -r requirement/phase2-render.txt
+
+Pillow>=10.0.0
+requests>=2.32.0
+python-dotenv>=1.0.0
+staticmap>=0.5.4
+PyYAML>=6.0

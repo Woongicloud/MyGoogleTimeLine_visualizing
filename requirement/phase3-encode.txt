@@ -1,0 +1,5 @@
+# Phase 3 - Video Encoding
+# imageio-ffmpeg bundles an FFmpeg binary - no system install needed.
+# Install: pip install -r requirement/phase3-encode.txt
+
+imageio-ffmpeg>=0.5.1

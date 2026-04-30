@@ -86,8 +86,18 @@ class RenderConfig:
     # ── 캔버스 ──────────────────────────────────
     map_w:           int   = 1280
     map_h:           int   = 720
-    bbox_padding:    float = 0.05
+    bbox_padding:    float = 0.10        # 동적 카메라용 — 약간 큰 여백
     bbox_min_pad_deg: float = 0.005
+
+    # ── World Canvas (동적 카메라용 대형 배경, deprecated) ──
+    canvas_scale:    int   = 3           # 사용 안함 — 타일 피라미드로 대체됨
+    min_viewport_deg: float = 0.008      # 프레임당 최소 뷰포트 크기 (도)
+
+    # ── 타일 피라미드 (다중 줌 적응형 배경) ─────
+    max_zoom:         int   = 17         # 다운로드 가능 최대 줌 (대부분 17~19까지 지원)
+    zoom_offset:      int   = 0          # 양수=더 정밀(타일 多), 음수=빠름
+    prefetch_parallel: int  = 8          # 타일 병렬 다운로드 워커 수
+    tile_cache_dir:   str   = "output/_tile_cache"   # 프로젝트 전역 타일 캐시 폴더
 
     # ── 잔상(trail) ─────────────────────────────
     trail_len:        int   = 300
@@ -97,6 +107,18 @@ class RenderConfig:
     outline_color:    tuple = (255, 255, 255)
     outline_alpha:    int   = 200
     outline_extra_r:  int   = 3
+
+    # ── 이동 경로 선 ────────────────────────────
+    draw_lines:      bool  = True        # 연속 포인트 연결선 그리기
+    line_widths: dict = field(default_factory=lambda: {
+        "stationary": 0,    # 0 = 선 안 그림
+        "walking":    2,
+        "cycling":    2,
+        "vehicle":    3,
+        "highway":    3,
+        "flight":     2,
+        "unknown":    1,
+    })
 
     # ── 교통수단 색상 (RGB) ─────────────────────
     activity_colors: dict = field(default_factory=lambda: {
@@ -180,10 +202,19 @@ def load_config(config_path: Optional[Path] = None) -> RenderConfig:
 
     # canvas 섹션
     c = raw.get("canvas", {})
-    if "width"               in c: cfg.map_w            = int(c["width"])
-    if "height"              in c: cfg.map_h             = int(c["height"])
-    if "bbox_padding"        in c: cfg.bbox_padding      = float(c["bbox_padding"])
-    if "bbox_min_padding_deg" in c: cfg.bbox_min_pad_deg = float(c["bbox_min_padding_deg"])
+    if "width"                in c: cfg.map_w            = int(c["width"])
+    if "height"               in c: cfg.map_h             = int(c["height"])
+    if "bbox_padding"         in c: cfg.bbox_padding      = float(c["bbox_padding"])
+    if "bbox_min_padding_deg" in c: cfg.bbox_min_pad_deg  = float(c["bbox_min_padding_deg"])
+    if "scale"                in c: cfg.canvas_scale      = int(c["scale"])
+    if "min_viewport_deg"     in c: cfg.min_viewport_deg  = float(c["min_viewport_deg"])
+
+    # tiles 섹션 (타일 피라미드)
+    ts = raw.get("tiles", {})
+    if "max_zoom"          in ts: cfg.max_zoom          = int(ts["max_zoom"])
+    if "zoom_offset"       in ts: cfg.zoom_offset       = int(ts["zoom_offset"])
+    if "prefetch_parallel" in ts: cfg.prefetch_parallel = int(ts["prefetch_parallel"])
+    if "cache_dir"         in ts: cfg.tile_cache_dir    = str(ts["cache_dir"])
 
     # trail 섹션
     t = raw.get("trail", {})
@@ -194,12 +225,15 @@ def load_config(config_path: Optional[Path] = None) -> RenderConfig:
     if "outline_color"        in t: cfg.outline_color    = tuple(t["outline_color"])
     if "outline_alpha"        in t: cfg.outline_alpha    = int(t["outline_alpha"])
     if "outline_extra_radius" in t: cfg.outline_extra_r  = int(t["outline_extra_radius"])
+    if "draw_lines"           in t: cfg.draw_lines       = bool(t["draw_lines"])
 
-    # colors / radius 섹션
+    # colors / radius / line_width 섹션
     if "colors" in raw:
         cfg.activity_colors = {k: tuple(v) for k, v in raw["colors"].items()}
     if "radius" in raw:
         cfg.activity_radius = {k: int(v) for k, v in raw["radius"].items()}
+    if "line_width" in raw:
+        cfg.line_widths = {k: int(v) for k, v in raw["line_width"].items()}
 
     # hud 섹션
     h = raw.get("hud", {})

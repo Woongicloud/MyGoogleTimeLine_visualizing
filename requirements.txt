@@ -1,20 +1,9 @@
-# Phase 1 - parsing
-ijson>=3.5.0
+# Convenience root file - delegates to requirement/base.txt
+# pip install -r requirements.txt   ==   pip install -r requirement/base.txt
+#
+# For phase-specific minimal installs, use:
+#   pip install -r requirement/phase1-parse.txt
+#   pip install -r requirement/phase2-render.txt
+#   pip install -r requirement/phase3-encode.txt
 
-# Phase 2 - rendering
-Pillow>=10.0.0
-requests>=2.32.0
-python-dotenv>=1.0.0
-staticmap>=0.5.4
-pyyaml>=6.0
-
-# Phase 3 - video encoding (bundles FFmpeg, no system install needed)
-imageio-ffmpeg>=0.5.1
-
-# Phase 3 (planned) - video encoding
-# opencv-python>=4.9.0
-
-# Backend (planned)
-# fastapi>=0.111.0
-# celery>=5.4.0
-# redis>=5.0.0
+-r requirement/base.txt

@@ -4,9 +4,11 @@ Google Takeout 타임라인 JSON을 파싱해 월별 이동 동선을 지도 위
 
 ```
 [Phase 1] JSON 파싱 → SQLite DB
-[Phase 2] GPS 트랙 → PNG 프레임 시퀀스  ← 현재 단계
-[Phase 3] PNG 시퀀스 → MP4 / GIF        (예정)
+[Phase 2] GPS 트랙 → PNG 프레임 시퀀스 (World Canvas + 동적 카메라)
+[Phase 3] PNG 시퀀스 → MP4 / GIF
 ```
+
+통합 진입점 [`main.py`](main.py)로 전체 파이프라인을 한 번에 실행하거나 각 단계를 개별 실행할 수 있습니다.
 
 ---
 
@@ -17,43 +19,82 @@ Google Takeout 타임라인 JSON을 파싱해 월별 이동 동선을 지도 위
 ```bash
 git clone <repo-url>
 cd MyGoogleTimeLine_visualizing
-pip install -r requirements.txt
+
+# 전체 설치 (Phase 1 + 2 + 3)
+pip install -r requirement/base.txt
 ```
+
+### Phase별 최소 설치
+
+```bash
+pip install -r requirement/phase1-parse.txt    # 파싱만 (ijson)
+pip install -r requirement/phase2-render.txt   # 렌더링만 (Pillow, staticmap, ...)
+pip install -r requirement/phase3-encode.txt   # 인코딩만 (imageio-ffmpeg)
+```
+
+루트의 `requirements.txt` 도 동일하게 작동합니다 (`requirement/base.txt`로 위임).
 
 ---
 
-## 빠른 시작
+## 빠른 시작 — 통합 main.py
 
-### 1. 타임라인 JSON 파싱
-
-Google Takeout에서 받은 JSON 파일을 `data/` 폴더에 넣고:
+### 한 번에 실행 (전체 파이프라인)
 
 ```bash
-python script/timeline_parser.py "data/Timeline Edits.json"
+# 신규 (DB 없을 때): 파싱 → 렌더링 → 인코딩 자동 실행
+python main.py pipeline 2026-03 --json "data/Timeline Edits.json"
+
+# DB 있을 때: 렌더링 + 인코딩만
+python main.py pipeline 2026-03
+
+# PNG까지만 (인코딩 생략)
+python main.py pipeline 2026-03 --no-encode
 ```
 
-파싱 결과 확인:
+### 단계별 실행
+
 ```bash
-python script/timeline_parser.py --summary
+# Phase 1 — JSON → SQLite
+python main.py parse "data/Timeline Edits.json"
+
+# DB 요약 통계
+python main.py summary
+
+# Phase 2 — PNG 프레임 시퀀스
+python main.py render 2026-03
+
+# 좌표 정확도 검증 (9개 기준점 십자가)
+python main.py render 2026-03 --verify
+
+# Phase 3 — MP4 + GIF 인코딩
+python main.py encode 2026-03
 ```
 
-### 2. 프레임 렌더링
+### 도움말
 
 ```bash
-# 2025년 12월 전체
-python script/frame_renderer.py 2025-12
+python main.py --help
+python main.py <subcommand> --help    # 각 서브커맨드 상세 옵션
+```
 
-# 특정 날짜 범위
-python script/frame_renderer.py 2025-12-20~2025-12-31
+출력: `output/<period>/frames/frame_*.png` + `<period>.mp4` + `<period>.gif`
 
-# 지도 스타일 변경
-python script/frame_renderer.py 2025-12 --map cartodb-light
+---
+
+## 추가 옵션 예시
+
+```bash
+# 다른 지도 공급자
+python main.py render 2026-03 --map cartodb-light
 
 # 영상 길이·fps 조정
-python script/frame_renderer.py 2025-08 --duration 30 --fps 24
-```
+python main.py render 2026-03 --duration 30 --fps 24
 
-출력: `output/2025-12/frames/frame_000000.png` ~ `frame_001799.png`
+# 인코딩 품질 / GIF 크기 조정
+python main.py encode 2026-03 --crf 23 --preset fast --gif-scale 640
+
+# 특정 날짜 범위
+python main.py render 2025-12-20~2025-12-31
 
 ---
 

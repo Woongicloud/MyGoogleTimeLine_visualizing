@@ -19,6 +19,7 @@ Google Timeline Visualizer — Phase 2: 프레임 렌더러
 import os
 import re
 import sys
+import json
 import math
 import sqlite3
 import argparse
@@ -128,11 +129,13 @@ def fetch_track(conn: sqlite3.Connection, start: date, end: date) -> list[dict]:
 # ──────────────────────────────────────────
 
 def compute_bbox(
-    track: list[dict], cfg: RenderConfig
+    track: list[dict], cfg: RenderConfig, padding_factor: float = 1.0
 ) -> tuple[float, float, float, float]:
     """
     GPS 트랙 bounding box 계산.
 
+    Args:
+        padding_factor: 기본 padding을 추가 배율 적용 (World Canvas는 1.5 권장)
     Returns:
         (min_lat, min_lng, max_lat, max_lng)
     """
@@ -140,8 +143,8 @@ def compute_bbox(
     lngs = [p["lng"] for p in track]
     lat_span = max(lats) - min(lats)
     lng_span = max(lngs) - min(lngs)
-    pad_lat  = max(lat_span * cfg.bbox_padding, cfg.bbox_min_pad_deg)
-    pad_lng  = max(lng_span * cfg.bbox_padding, cfg.bbox_min_pad_deg)
+    pad_lat  = max(lat_span * cfg.bbox_padding * padding_factor, cfg.bbox_min_pad_deg)
+    pad_lng  = max(lng_span * cfg.bbox_padding * padding_factor, cfg.bbox_min_pad_deg)
     return (
         min(lats) - pad_lat,
         min(lngs) - pad_lng,
@@ -163,32 +166,87 @@ def latlng_to_pixel(
     lat: float,
     lng: float,
     bbox: tuple[float, float, float, float],
-    cfg: RenderConfig,
+    w: int,
+    h: int,
+    clamp: bool = False,
 ) -> tuple[int, int]:
-    """위경도 → Mercator 투영 픽셀 좌표"""
+    """
+    위경도 → Mercator 투영 픽셀 좌표.
+
+    Args:
+        bbox:  (min_lat, min_lng, max_lat, max_lng) — 픽셀 0,0이 (max_lat, min_lng)
+        w, h:  대상 이미지 크기
+        clamp: True 시 [0, w-1] × [0, h-1] 로 제한
+    """
     min_lat, min_lng, max_lat, max_lng = bbox
     x0, x1 = _mercator_x(min_lng), _mercator_x(max_lng)
-    y0, y1 = _mercator_y(max_lat), _mercator_y(min_lat)  # Y 반전
+    y0, y1 = _mercator_y(max_lat), _mercator_y(min_lat)  # Y 반전 (위쪽이 작은 값)
 
-    px = int(((_mercator_x(lng) - x0) / (x1 - x0)) * cfg.map_w)
-    py = int(((_mercator_y(lat) - y0) / (y1 - y0)) * cfg.map_h)
-    return (
-        max(0, min(cfg.map_w - 1, px)),
-        max(0, min(cfg.map_h - 1, py)),
-    )
+    # round()로 서브픽셀 반올림 — int()의 절단보다 좌표 정확도 ±0.5px 향상
+    px = round(((_mercator_x(lng) - x0) / (x1 - x0)) * w)
+    py = round(((_mercator_y(lat) - y0) / (y1 - y0)) * h)
+
+    if clamp:
+        px = max(0, min(w - 1, px))
+        py = max(0, min(h - 1, py))
+    return int(px), int(py)
 
 
 def _compute_zoom(
     min_lat: float, min_lng: float, max_lat: float, max_lng: float,
-    cfg: RenderConfig,
+    w: int, h: int,
 ) -> int:
-    """bbox + 출력 해상도 → 최적 줌 레벨 (0~17)"""
+    """bbox + 이미지 해상도 → 최적 줌 레벨 (0~17)"""
     TILE_SIZE = 256
     lat_frac  = abs(_mercator_y(max_lat) - _mercator_y(min_lat))
     lng_frac  = abs(max_lng - min_lng) / 360
-    lat_zoom  = math.floor(math.log2(cfg.map_h / TILE_SIZE / lat_frac)) if lat_frac > 1e-9 else 17
-    lng_zoom  = math.floor(math.log2(cfg.map_w / TILE_SIZE / lng_frac)) if lng_frac > 1e-9 else 17
+    lat_zoom  = math.floor(math.log2(h / TILE_SIZE / lat_frac)) if lat_frac > 1e-9 else 17
+    lng_zoom  = math.floor(math.log2(w / TILE_SIZE / lng_frac)) if lng_frac > 1e-9 else 17
     return max(0, min(17, min(lat_zoom, lng_zoom)))
+
+
+def compute_rendered_bbox(
+    center_lat: float, center_lng: float,
+    zoom: int, w: int, h: int,
+) -> tuple[float, float, float, float]:
+    """
+    staticmap이 (center, zoom, w, h)로 실제 렌더링한 정확한 bbox 역산.
+
+    Web Mercator (EPSG:3857) 기준 — 표준 XYZ 타일 좌표계와 일치.
+    integer zoom으로 인해 의도한 bbox와 항상 차이가 발생하므로,
+    이 함수의 결과를 모든 좌표 매핑의 기준점으로 사용해야 정확하다.
+
+    Returns:
+        (min_lat, min_lng, max_lat, max_lng) — 픽셀 정확한 실제 캔버스 bbox
+    """
+    TILE_SIZE = 256
+    world_size = TILE_SIZE * (2 ** zoom)   # zoom Z의 전체 월드 픽셀 크기
+
+    # 중심 좌표 → 월드 픽셀 좌표 (Web Mercator)
+    cx = (center_lng + 180.0) / 360.0 * world_size
+    sin_lat = math.sin(math.radians(center_lat))
+    sin_lat = max(-0.99999, min(0.99999, sin_lat))   # 극지방 클램프
+    cy = (0.5 - math.log((1 + sin_lat) / (1 - sin_lat)) / (4 * math.pi)) * world_size
+
+    # 이미지 4모서리의 월드 픽셀 좌표 (중심 기준 ±w/2, ±h/2)
+    left   = cx - w / 2.0
+    right  = cx + w / 2.0
+    top    = cy - h / 2.0
+    bottom = cy + h / 2.0
+
+    # 역변환: 월드 픽셀 → lng
+    min_lng = left  / world_size * 360.0 - 180.0
+    max_lng = right / world_size * 360.0 - 180.0
+
+    # 역변환: 월드 픽셀 → lat (역 Web Mercator)
+    def y_to_lat(y_world: float) -> float:
+        n = math.pi * (1.0 - 2.0 * y_world / world_size)
+        return math.degrees(math.atan(math.sinh(n)))
+
+    max_lat = y_to_lat(top)      # top = 작은 y = 높은 위도
+    min_lat = y_to_lat(bottom)
+
+    return (min_lat, min_lng, max_lat, max_lng)
 
 
 # ──────────────────────────────────────────
@@ -198,7 +256,9 @@ def _compute_zoom(
 def _fetch_tile_stitched(
     bbox: tuple[float, float, float, float],
     url_template: str,
-    cfg: RenderConfig,
+    w: int,
+    h: int,
+    provider_name: str,
     cache_path: Path,
 ) -> Image.Image:
     """staticmap으로 XYZ 타일 스티칭 (CartoDB/OSM/Stadia 모두 지원)"""
@@ -206,10 +266,11 @@ def _fetch_tile_stitched(
 
     min_lat, min_lng, max_lat, max_lng = bbox
     center = ((min_lng + max_lng) / 2, (min_lat + max_lat) / 2)
-    zoom   = _compute_zoom(min_lat, min_lng, max_lat, max_lng, cfg)
-    log.info("타일 스티칭 (provider=%s, zoom=%d)...", cfg.provider, zoom)
+    zoom   = _compute_zoom(min_lat, min_lng, max_lat, max_lng, w, h)
+    log.info("타일 스티칭 (provider=%s, zoom=%d, %dx%d)...",
+             provider_name, zoom, w, h)
 
-    m   = StaticMap(cfg.map_w, cfg.map_h, url_template=url_template)
+    m   = StaticMap(w, h, url_template=url_template)
     img = m.render(zoom=zoom, center=center)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(cache_path)
@@ -220,6 +281,8 @@ def _fetch_tile_stitched(
 def _fetch_mapbox(
     bbox: tuple[float, float, float, float],
     cfg: RenderConfig,
+    w: int,
+    h: int,
     cache_path: Path,
 ) -> Image.Image:
     """Mapbox Static API 타일 (MAPBOX_TOKEN 필요)"""
@@ -232,12 +295,13 @@ def _fetch_mapbox(
     style    = cfg.custom_url or "mapbox/dark-v11"
     min_lat, min_lng, max_lat, max_lng = bbox
     bbox_str = f"[{min_lng:.6f},{min_lat:.6f},{max_lng:.6f},{max_lat:.6f}]"
+    # Mapbox 최대 1280×1280 (@2x로 2560까지 가능)
     url = (
         f"https://api.mapbox.com/styles/v1/{style}/static/"
-        f"{bbox_str}/{cfg.map_w}x{cfg.map_h}?access_token={token}&logo=false"
+        f"{bbox_str}/{w}x{h}?access_token={token}&logo=false"
     )
-    log.info("Mapbox Static API 요청 중 (style=%s)...", style)
-    resp = requests.get(url, timeout=30)
+    log.info("Mapbox Static API 요청 중 (style=%s, %dx%d)...", style, w, h)
+    resp = requests.get(url, timeout=60)
     resp.raise_for_status()
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_bytes(resp.content)
@@ -245,79 +309,242 @@ def _fetch_mapbox(
     return Image.open(cache_path).convert("RGB")
 
 
-def fetch_base_tile(
+def _meta_path(cache_path: Path) -> Path:
+    """캔버스 메타데이터 사이드카 경로 (.png → .json)"""
+    return cache_path.with_suffix(".json")
+
+
+def _save_canvas_meta(
+    meta_path: Path,
+    intended_bbox: tuple,
+    actual_bbox:   tuple,
+    center_lat:    float,
+    center_lng:    float,
+    zoom:          int,
+    canvas_w:      int,
+    canvas_h:      int,
+    provider:      str,
+) -> None:
+    """캔버스 메타데이터 JSON 저장 — 실제 렌더링 bbox 영구 보존"""
+    meta = {
+        "intended_bbox": list(intended_bbox),
+        "actual_bbox":   list(actual_bbox),
+        "center_lat":    center_lat,
+        "center_lng":    center_lng,
+        "zoom":          zoom,
+        "canvas_w":      canvas_w,
+        "canvas_h":      canvas_h,
+        "provider":      provider,
+    }
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
+def fetch_world_canvas(
     bbox: tuple[float, float, float, float],
     cfg: RenderConfig,
     cache_path: Path,
-) -> Image.Image:
+) -> tuple[Image.Image, tuple[float, float, float, float]]:
     """
-    배경 타일 로드. 우선순위:
-      1. 로컬 캐시 (provider 이름 포함 → 공급자 전환 시 자동 갱신)
-      2. Mapbox Static API  (provider="mapbox")
-      3. XYZ 타일 스티칭    (나머지 모든 공급자)
-      4. 단색 폴백          (#1e1e1e, 타일 요청 실패 시)
+    동적 카메라용 대형 World Canvas 다운로드 + 정확한 actual_bbox 반환.
+
+    핵심 알고리즘:
+      1. 의도한 bbox로부터 integer zoom 산출
+      2. staticmap이 (center, zoom, w, h)로 렌더링 → 실제 bbox는 의도와 다름
+      3. compute_rendered_bbox()로 실제 bbox 역산 → 좌표 매핑 기준점 확정
+      4. .json 사이드카로 영구 캐싱 (재실행 시 재계산 불필요)
+
+    Returns:
+        (canvas_image, actual_bbox)
     """
-    if cache_path.exists():
-        log.info("배경 타일 캐시 사용: %s", cache_path)
-        return Image.open(cache_path).convert("RGB")
+    canvas_w = cfg.map_w * cfg.canvas_scale
+    canvas_h = cfg.map_h * cfg.canvas_scale
+    meta_path = _meta_path(cache_path)
+
+    # 1차: 캐시 + 메타데이터 둘 다 있으면 즉시 반환
+    if cache_path.exists() and meta_path.exists():
+        cached = Image.open(cache_path).convert("RGB")
+        if cached.size == (canvas_w, canvas_h):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                actual_bbox = tuple(meta["actual_bbox"])
+                log.info("World Canvas 캐시 사용: %s (%dx%d, zoom=%d)",
+                         cache_path, canvas_w, canvas_h, meta.get("zoom", -1))
+                log.info("  실제 bbox: lat[%.6f~%.6f]  lng[%.6f~%.6f]",
+                         actual_bbox[0], actual_bbox[2], actual_bbox[1], actual_bbox[3])
+                return cached, actual_bbox
+            except (KeyError, ValueError, json.JSONDecodeError):
+                log.warning("메타데이터 손상 → 재다운로드")
+
+    # 2차: 다운로드
+    log.info("World Canvas 다운로드 중 (%dx%d, scale=%d)...",
+             canvas_w, canvas_h, cfg.canvas_scale)
+
+    center_lat = (bbox[0] + bbox[2]) / 2
+    center_lng = (bbox[1] + bbox[3]) / 2
+    zoom       = _compute_zoom(*bbox, canvas_w, canvas_h)
 
     try:
         if cfg.provider == "mapbox":
-            return _fetch_mapbox(bbox, cfg, cache_path)
-
-        url = cfg.tile_url()   # custom_url 또는 TILE_PROVIDERS 값
-        return _fetch_tile_stitched(bbox, url, cfg, cache_path)
-
+            log.warning("Mapbox는 대형 캔버스 미지원 → scale=1 사용")
+            img = _fetch_mapbox(bbox, cfg, cfg.map_w, cfg.map_h, cache_path)
+            actual_w, actual_h = cfg.map_w, cfg.map_h
+        else:
+            url = cfg.tile_url()
+            img = _fetch_tile_stitched(
+                bbox, url, canvas_w, canvas_h, cfg.provider, cache_path
+            )
+            actual_w, actual_h = canvas_w, canvas_h
     except Exception as e:
-        log.warning("타일 로드 실패 (%s) → 단색 배경 사용", e)
-        img = Image.new("RGB", (cfg.map_w, cfg.map_h), (30, 30, 30))
+        log.warning("World Canvas 로드 실패 (%s) → 단색 배경", e)
+        img = Image.new("RGB", (canvas_w, canvas_h), (30, 30, 30))
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         img.save(cache_path)
-        return img
+        actual_w, actual_h = canvas_w, canvas_h
+
+    # 3차: 실제 렌더링된 bbox 역산
+    actual_bbox = compute_rendered_bbox(center_lat, center_lng, zoom, actual_w, actual_h)
+    _save_canvas_meta(
+        meta_path, bbox, actual_bbox,
+        center_lat, center_lng, zoom, actual_w, actual_h, cfg.provider,
+    )
+
+    # 의도 vs 실제 차이 로그
+    d_lat = (actual_bbox[2] - actual_bbox[0]) - (bbox[2] - bbox[0])
+    d_lng = (actual_bbox[3] - actual_bbox[1]) - (bbox[3] - bbox[1])
+    log.info("  의도한 bbox: lat[%.6f~%.6f]  lng[%.6f~%.6f]",
+             bbox[0], bbox[2], bbox[1], bbox[3])
+    log.info("  실제 bbox  : lat[%.6f~%.6f]  lng[%.6f~%.6f]  (diff: lat+%.4f° lng+%.4f°)",
+             actual_bbox[0], actual_bbox[2], actual_bbox[1], actual_bbox[3], d_lat, d_lng)
+    log.info("  zoom=%d, %dx%d", zoom, actual_w, actual_h)
+
+    return img, actual_bbox
 
 
 # ──────────────────────────────────────────
 # 프레임 렌더링
 # ──────────────────────────────────────────
 
-def render_frame(
-    base_img : Image.Image,
-    track    : list[dict],
-    up_to_idx: int,
-    bbox     : tuple[float, float, float, float],
-    cfg      : RenderConfig,
-) -> Image.Image:
+def compute_frame_viewport(
+    visible: list[dict],
+    cfg: RenderConfig,
+) -> tuple[float, float, float, float]:
     """
-    단일 프레임 렌더링.
+    프레임별 동적 뷰포트 bbox 계산.
 
-    Args:
-        up_to_idx: 현재 프레임에서 표시할 마지막 GPS 포인트 인덱스
+    트레일에 보이는 모든 포인트가 들어가도록 bbox 산출 → 패딩 → 최소 크기 보정 →
+    출력 종횡비 맞춤.
+
+    타일 피라미드 방식에서는 캔버스 클램프 불필요 (전 세계 어디든 다운로드 가능).
+
+    Returns:
+        (min_lat, min_lng, max_lat, max_lng)
     """
-    img  = base_img.copy().convert("RGBA")
-    draw = ImageDraw.Draw(img, "RGBA")
+    lats = [p["lat"] for p in visible]
+    lngs = [p["lng"] for p in visible]
 
-    start   = max(0, up_to_idx - cfg.trail_len)
-    visible = track[start : up_to_idx + 1]
-    n       = len(visible)
+    mn_lat, mx_lat = min(lats), max(lats)
+    mn_lng, mx_lng = min(lngs), max(lngs)
+
+    # 패딩 적용
+    lat_span = mx_lat - mn_lat
+    lng_span = mx_lng - mn_lng
+    pad_lat  = max(lat_span * cfg.bbox_padding, cfg.bbox_min_pad_deg)
+    pad_lng  = max(lng_span * cfg.bbox_padding, cfg.bbox_min_pad_deg)
+    mn_lat -= pad_lat;  mx_lat += pad_lat
+    mn_lng -= pad_lng;  mx_lng += pad_lng
+
+    # 최소 뷰포트 보정 (정지 시 과도한 줌인 방지)
+    cur_lat_span = mx_lat - mn_lat
+    cur_lng_span = mx_lng - mn_lng
+    if cur_lat_span < cfg.min_viewport_deg:
+        c = (mx_lat + mn_lat) / 2
+        mn_lat = c - cfg.min_viewport_deg / 2
+        mx_lat = c + cfg.min_viewport_deg / 2
+    if cur_lng_span < cfg.min_viewport_deg:
+        c = (mx_lng + mn_lng) / 2
+        mn_lng = c - cfg.min_viewport_deg / 2
+        mx_lng = c + cfg.min_viewport_deg / 2
+
+    # 출력 종횡비(map_w/map_h)에 맞춰 한쪽이 너무 좁아지면 확장
+    aspect = cfg.map_w / cfg.map_h
+    cur_lng_span = mx_lng - mn_lng
+    cur_lat_span = mx_lat - mn_lat
+    if cur_lng_span / max(cur_lat_span, 1e-9) < aspect:
+        target = cur_lat_span * aspect
+        c = (mx_lng + mn_lng) / 2
+        mn_lng = c - target / 2
+        mx_lng = c + target / 2
+    elif cur_lat_span / max(cur_lng_span, 1e-9) < 1 / aspect:
+        target = cur_lng_span / aspect
+        c = (mx_lat + mn_lat) / 2
+        mn_lat = c - target / 2
+        mx_lat = c + target / 2
+
+    return (mn_lat, mn_lng, mx_lat, mx_lng)
+
+
+# crop_to_viewport는 제거됨 — 타일 피라미드 방식(tile_cache.composite_for_bbox)으로 대체
+
+
+def _draw_lines(
+    draw: ImageDraw.ImageDraw,
+    visible: list[dict],
+    frame_bbox: tuple[float, float, float, float],
+    cfg: RenderConfig,
+) -> None:
+    """이동 경로 선 — 연속 포인트 연결. 정지↔정지는 스킵."""
+    n = len(visible)
+    if n < 2:
+        return
+    a_range = cfg.trail_alpha_max - cfg.trail_alpha_min
+
+    for i in range(1, n):
+        prev = visible[i - 1]
+        curr = visible[i]
+        pa = prev.get("activity") or "unknown"
+        ca = curr.get("activity") or "unknown"
+
+        # 정지 ↔ 정지: 선 생략
+        if pa == "stationary" and ca == "stationary":
+            continue
+
+        line_w = cfg.line_widths.get(ca, cfg.line_widths.get("unknown", 1))
+        if line_w <= 0:
+            continue
+
+        color = cfg.activity_colors.get(ca, (200, 200, 200))
+        alpha = int(cfg.trail_alpha_min + a_range * (i / max(n - 1, 1)))
+
+        x1, y1 = latlng_to_pixel(prev["lat"], prev["lng"], frame_bbox, cfg.map_w, cfg.map_h)
+        x2, y2 = latlng_to_pixel(curr["lat"], curr["lng"], frame_bbox, cfg.map_w, cfg.map_h)
+        draw.line([(x1, y1), (x2, y2)], fill=(*color, alpha), width=line_w)
+
+
+def _draw_dots(
+    draw: ImageDraw.ImageDraw,
+    visible: list[dict],
+    frame_bbox: tuple[float, float, float, float],
+    cfg: RenderConfig,
+) -> None:
+    """잔상 점 + 현재 위치 외곽선"""
+    n = len(visible)
     a_range = cfg.trail_alpha_max - cfg.trail_alpha_min
 
     for i, pt in enumerate(visible):
         alpha  = int(cfg.trail_alpha_min + a_range * (i / max(n - 1, 1)))
-        color  = cfg.activity_colors.get(pt["activity"] or "unknown", (200, 200, 200))
-        radius = cfg.activity_radius.get(pt["activity"] or "unknown", 2)
-        px, py = latlng_to_pixel(pt["lat"], pt["lng"], bbox, cfg)
-        r      = radius if i < n - 1 else radius * cfg.current_pt_scale + 1
-
-        draw.ellipse(
-            [px - r, py - r, px + r, py + r],
-            fill=(*color, alpha),
-        )
+        act    = pt.get("activity") or "unknown"
+        color  = cfg.activity_colors.get(act, (200, 200, 200))
+        radius = cfg.activity_radius.get(act, 2)
+        px, py = latlng_to_pixel(pt["lat"], pt["lng"], frame_bbox, cfg.map_w, cfg.map_h)
+        r = radius if i < n - 1 else radius * cfg.current_pt_scale + 1
+        draw.ellipse([px - r, py - r, px + r, py + r], fill=(*color, alpha))
 
     # 현재 위치 외곽선
     if visible:
         curr   = visible[-1]
-        px, py = latlng_to_pixel(curr["lat"], curr["lng"], bbox, cfg)
-        base_r = cfg.activity_radius.get(curr["activity"] or "unknown", 2)
+        px, py = latlng_to_pixel(curr["lat"], curr["lng"], frame_bbox, cfg.map_w, cfg.map_h)
+        act    = curr.get("activity") or "unknown"
+        base_r = cfg.activity_radius.get(act, 2)
         r_out  = base_r * cfg.current_pt_scale + cfg.outline_extra_r
         draw.ellipse(
             [px - r_out, py - r_out, px + r_out, py + r_out],
@@ -325,7 +552,44 @@ def render_frame(
             width=2,
         )
 
-    return img.convert("RGB")
+
+def render_frame(
+    tile_cache  : "TileCache",
+    track       : list[dict],
+    up_to_idx   : int,
+    cfg         : RenderConfig,
+) -> tuple[Image.Image, tuple[float, float, float, float], int]:
+    """
+    단일 프레임 렌더링 (타일 피라미드 + 적응형 줌).
+
+    1. visible trail 산출
+    2. 프레임 뷰포트 bbox + ideal_zoom 계산
+    3. 캐시된 타일들을 모자이크 합성 + AFFINE 서브픽셀 변환
+    4. 선(이동 경로) → 점(잔상) 순으로 오버레이
+
+    Returns:
+        (rendered_image, frame_bbox, zoom_used)
+    """
+    from tile_cache import composite_for_bbox, ideal_zoom_for_bbox
+
+    start   = max(0, up_to_idx - cfg.trail_len)
+    visible = track[start : up_to_idx + 1]
+
+    frame_bbox = compute_frame_viewport(visible, cfg)
+    zoom = ideal_zoom_for_bbox(
+        frame_bbox, cfg.map_w, cfg.map_h, cfg.max_zoom, cfg.zoom_offset,
+    )
+
+    bg = composite_for_bbox(tile_cache, frame_bbox, cfg.map_w, cfg.map_h, zoom)
+
+    img  = bg.convert("RGBA")
+    draw = ImageDraw.Draw(img, "RGBA")
+
+    if cfg.draw_lines:
+        _draw_lines(draw, visible, frame_bbox, cfg)
+    _draw_dots(draw, visible, frame_bbox, cfg)
+
+    return img.convert("RGB"), frame_bbox, zoom
 
 
 def draw_hud(
@@ -384,6 +648,77 @@ def draw_hud(
 
 
 # ──────────────────────────────────────────
+# 기준점 검증 (--verify)
+# ──────────────────────────────────────────
+
+def render_verification_overlay(
+    canvas:      Image.Image,
+    canvas_bbox: tuple[float, float, float, float],
+    output_path: Path,
+) -> None:
+    """
+    캔버스 좌표 정확도 검증 — 9개 기준점에 십자가 + 라벨 표시.
+
+    actual_bbox 기반 latlng_to_pixel()로 4 모서리 + 4 변 중점 + 중심 마킹.
+    저장된 이미지를 열어 십자가가 지도의 정확한 위치(예: 모서리 라벨이
+    실제 모서리)에 있는지 시각적으로 확인 가능.
+    """
+    img = canvas.copy()
+    draw = ImageDraw.Draw(img, "RGBA")
+    cw, ch = canvas.size
+
+    min_lat, min_lng, max_lat, max_lng = canvas_bbox
+    mid_lat = (min_lat + max_lat) / 2
+    mid_lng = (min_lng + max_lng) / 2
+
+    points = [
+        ("TL",     max_lat, min_lng),  # 좌상
+        ("T-mid",  max_lat, mid_lng),
+        ("TR",     max_lat, max_lng),  # 우상
+        ("L-mid",  mid_lat, min_lng),
+        ("CENTER", mid_lat, mid_lng),  # 정중앙
+        ("R-mid",  mid_lat, max_lng),
+        ("BL",     min_lat, min_lng),  # 좌하
+        ("B-mid",  min_lat, mid_lng),
+        ("BR",     min_lat, max_lng),  # 우하
+    ]
+
+    cross_size = max(20, cw // 100)
+    line_w     = max(3, cw // 800)
+
+    try:
+        from PIL import ImageFont
+        font = ImageFont.truetype("arial.ttf", max(14, cw // 120))
+    except Exception:
+        font = None
+
+    for label, lat, lng in points:
+        px, py = latlng_to_pixel(lat, lng, canvas_bbox, cw, ch)
+
+        # 빨강 십자가
+        draw.line([(px - cross_size, py), (px + cross_size, py)],
+                  fill=(255, 0, 0, 255), width=line_w)
+        draw.line([(px, py - cross_size), (px, py + cross_size)],
+                  fill=(255, 0, 0, 255), width=line_w)
+
+        # 라벨 + 좌표 (반투명 검정 배경)
+        text = f"{label}\n{lat:.5f}\n{lng:.5f}"
+        text_bg = (0, 0, 0, 180)
+        text_pos = (px + cross_size + 5, py + cross_size + 5)
+        # 텍스트 배경 박스 (대략적)
+        draw.rectangle(
+            [text_pos, (text_pos[0] + cw // 8, text_pos[1] + cw // 32)],
+            fill=text_bg,
+        )
+        draw.text(text_pos, text, fill=(255, 255, 255, 255), font=font)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(output_path)
+    log.info("기준점 검증 이미지 저장: %s", output_path)
+    log.info("  → 9개 빨강 십자가 위치가 라벨 좌표와 일치하는지 시각 확인")
+
+
+# ──────────────────────────────────────────
 # 메인 렌더 루프
 # ──────────────────────────────────────────
 
@@ -391,6 +726,7 @@ def render_frames(
     period_str: str,
     output_dir: Optional[Path] = None,
     cfg:        Optional[RenderConfig] = None,
+    verify:     bool = False,
 ) -> None:
     """
     기간 전체를 PNG 시퀀스로 렌더링.
@@ -418,15 +754,47 @@ def render_frames(
     track = fetch_track(conn, start, end)
     conn.close()
 
-    bbox        = compute_bbox(track, cfg)
     period_slug = period_str.replace("~", "_")
     out_dir     = output_dir or Path(cfg.output_root) / period_slug / "frames"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 공급자 이름 포함 → 공급자 변경 시 캐시 무효화
-    cache_tile = Path(cfg.output_root) / period_slug / f"tile_{cfg.provider}.png"
-    base_img   = fetch_base_tile(bbox, cfg, cache_tile)
+    # Google Drive 동기화 락 대기 — 쓰기 가능해질 때까지 (최대 60초)
+    import time
+    test_file = out_dir / ".write_test"
+    for attempt in range(30):
+        try:
+            test_file.write_bytes(b"ok")
+            test_file.unlink()
+            break
+        except (PermissionError, OSError) as e:
+            if attempt == 29:
+                log.error("출력 폴더 쓰기 불가: %s (%s)", out_dir, e)
+                log.error("Google Drive 동기화 완료 대기 후 재시도하세요.")
+                sys.exit(1)
+            if attempt == 0:
+                log.info("출력 폴더 쓰기 락 — 동기화 대기 중...")
+            time.sleep(2)
 
+    # 타일 피라미드 기반 적응형 배경 — 단일 World Canvas 대신 사용
+    from tile_cache import (
+        TileCache, build_tile_url, ideal_zoom_for_bbox, tiles_for_bbox,
+        composite_for_bbox,
+    )
+
+    tile_url = build_tile_url(
+        provider       = cfg.provider,
+        base_url       = cfg.tile_url(),    # custom 또는 TILE_PROVIDERS 값
+        custom_url     = cfg.custom_url,
+        mapbox_token   = cfg.mapbox_token,
+        stadia_api_key = cfg.stadia_api_key,
+    )
+    tile_cache = TileCache(
+        url_template = tile_url,
+        cache_dir    = Path(cfg.tile_cache_dir),
+        provider     = cfg.provider,
+    )
+
+    # 프레임 인덱스 사전 계산 (포인트 균등 분배)
     total_frames = cfg.duration_sec * cfg.fps
     n_points     = len(track)
     indices      = [
@@ -434,13 +802,52 @@ def render_frames(
         for i in range(total_frames)
     ]
 
+    # ── --verify: 대표 영역에 대해 검증 이미지 생성 후 종료 ────────────
+    if verify:
+        all_bbox = compute_bbox(track, cfg, padding_factor=1.2)
+        verify_zoom = ideal_zoom_for_bbox(
+            all_bbox, cfg.map_w * 2, cfg.map_h * 2, cfg.max_zoom, cfg.zoom_offset,
+        )
+        log.info("검증 모드: 전체 bbox + zoom=%d", verify_zoom)
+        # 검증은 사전 수집 없이 즉석 다운로드
+        bg = composite_for_bbox(tile_cache, all_bbox, cfg.map_w * 2, cfg.map_h * 2, verify_zoom)
+        verify_path = Path(cfg.output_root) / period_slug / f"verify_{cfg.provider}.png"
+        render_verification_overlay(bg, all_bbox, verify_path)
+        log.info("검증 모드 — 프레임 렌더링 생략. 이미지 확인 후 정확도 판정.")
+        return
+
+    # ── 1단계: 모든 프레임의 viewport·zoom 사전 분석 + 타일 수집 ─────
+    log.info("타일 사전 분석 중 (%d 프레임)...", total_frames)
+    needed_tiles: set[tuple[int, int, int]] = set()
+    zoom_histogram: dict[int, int] = {}
+
+    for pt_idx in indices:
+        start    = max(0, pt_idx - cfg.trail_len)
+        visible  = track[start : pt_idx + 1]
+        if not visible:
+            continue
+        fb       = compute_frame_viewport(visible, cfg)
+        zoom     = ideal_zoom_for_bbox(fb, cfg.map_w, cfg.map_h, cfg.max_zoom, cfg.zoom_offset)
+        zoom_histogram[zoom] = zoom_histogram.get(zoom, 0) + 1
+        for t in tiles_for_bbox(fb, zoom):
+            needed_tiles.add(t)
+
+    log.info("필요 타일: %d개  | 줌 분포: %s",
+             len(needed_tiles),
+             ", ".join(f"z{z}={c}" for z, c in sorted(zoom_histogram.items())))
+
+    # ── 2단계: 병렬 다운로드 (캐시 미적중분만) ──────────────────────
+    tile_cache.prefetch(needed_tiles, parallel=cfg.prefetch_parallel)
+
+    # ── 3단계: 프레임 렌더링 ──────────────────────────────────────
     log.info(
-        "렌더링 시작: %d프레임 | %d초@%dfps | GPS %d건 | trail %d",
-        total_frames, cfg.duration_sec, cfg.fps, n_points, cfg.trail_len,
+        "렌더링 시작: %d프레임 | %d초@%dfps | GPS %d건 | trail %d | lines=%s",
+        total_frames, cfg.duration_sec, cfg.fps,
+        n_points, cfg.trail_len, cfg.draw_lines,
     )
 
     for frame_idx, pt_idx in enumerate(indices):
-        img = render_frame(base_img, track, pt_idx, bbox, cfg)
+        img, _frame_bbox, _z = render_frame(tile_cache, track, pt_idx, cfg)
         img = draw_hud(img, track[pt_idx]["timestamp"], frame_idx, total_frames, cfg)
         img.save(out_dir / f"frame_{frame_idx:06d}.png")
 
@@ -451,7 +858,7 @@ def render_frames(
             )
 
     log.info("렌더링 완료: %d프레임 → %s", total_frames, out_dir)
-    log.info("[ 다음 단계 — Phase 3 ] python script/video_encoder.py %s", period_str)
+    log.info("[ 다음 단계 — Phase 3 ] python main.py encode %s", period_str)
 
 
 # ──────────────────────────────────────────
@@ -496,6 +903,8 @@ def main() -> None:
                     help="프레임 레이트 (기본: render_config.yml 값 또는 30)")
     ap.add_argument("--trail",    type=int,  default=None,
                     help="잔상 최대 점 개수 (기본: render_config.yml 값 또는 300)")
+    ap.add_argument("--verify",   action="store_true",
+                    help="기준점 검증 모드 — World Canvas + 9개 십자가 마커만 생성 후 종료")
     args = ap.parse_args()
 
     # 1. YAML 로드
@@ -518,6 +927,7 @@ def main() -> None:
         period_str = args.period,
         output_dir = args.output,
         cfg        = cfg,
+        verify     = args.verify,
     )
 
 
