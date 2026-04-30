@@ -93,6 +93,32 @@ line_width:
   highway:    3
   flight:     2
 
+# ── 이상치 필터 (정지 포인트 GPS 노이즈 제거) ────────────────────────────────
+# stationary 활동으로 분류된 포인트 중 주변 trend(선형회귀)에서 벗어난
+# 것들을 GPS 오차로 판단해 제거. 도보 동선이 깔끔해짐.
+outlier:
+  enabled: true
+  window_size: 10           # 양쪽 이웃 N개로 선형회귀
+  max_deviation_m: 200.0    # 예측 위치에서 N미터 이상 벗어나면 outlier
+
+# ── 아이콘 (이동수단 시각화) ──────────────────────────────────────────────────
+# head 위치(현재 이동 지점)에 활동별 PNG 아이콘 표시.
+# icon/ 폴더에 9개 아이콘: airplane, bicycle, bus, car, running, subway, taxi, train, walking
+icon:
+  dir:    "icon"      # 아이콘 PNG 폴더
+  size:   64          # 아이콘 최대 변 크기 (px)
+  alpha:  255         # 0=완전 투명, 255=불투명
+  rotate: false       # true 시 진행 방향(bearing)으로 아이콘 회전
+                      # 단, 아이콘이 위쪽을 향하도록 디자인된 경우만 자연스러움
+  mapping:
+    stationary: walking      # 정지 구간 (선택: 미사용 시 walking 폴백)
+    walking:    walking
+    cycling:    bicycle
+    vehicle:    car
+    highway:    car          # 고속도로 — train 으로 변경 가능
+    flight:     airplane
+    unknown:    walking
+
 # ── HUD (날짜/시각 + 진행 바) ─────────────────────────────────────────────────
 hud:
   enabled:       true    # false 로 설정하면 HUD 전체 숨김

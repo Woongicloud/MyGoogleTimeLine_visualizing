@@ -25,8 +25,8 @@ import sqlite3
 import argparse
 import logging
 from pathlib import Path
-from datetime import date, timedelta
-from typing import Optional
+from datetime import date, datetime, timedelta
+from typing import Optional, Iterable
 
 # render_config는 같은 script/ 디렉터리에 있으므로 경로 추가
 sys.path.insert(0, str(Path(__file__).parent))
@@ -127,6 +127,115 @@ def fetch_track(conn: sqlite3.Connection, start: date, end: date) -> list[dict]:
 # ──────────────────────────────────────────
 # 지오 유틸
 # ──────────────────────────────────────────
+
+# ──────────────────────────────────────────
+# 이상치 필터 (정지 포인트 GPS 노이즈 제거)
+# ──────────────────────────────────────────
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Haversine 거리(m)"""
+    R = 6_371_000
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lng2 - lng1)
+    a = math.sin(dp/2)**2 + math.cos(p1) * math.cos(p2) * math.sin(dl/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _linear_fit(xs: list[float], ys: list[float]) -> tuple[float, float]:
+    """최소제곱 선형회귀 y = a*x + b → (a, b)"""
+    n = len(xs)
+    if n < 2:
+        return 0.0, ys[0] if ys else 0.0
+    sx = sum(xs); sy = sum(ys)
+    sxx = sum(x * x for x in xs)
+    sxy = sum(x * y for x, y in zip(xs, ys))
+    denom = n * sxx - sx * sx
+    if abs(denom) < 1e-12:
+        return 0.0, sy / n
+    a = (n * sxy - sx * sy) / denom
+    b = (sy - a * sx) / n
+    return a, b
+
+
+def filter_outliers(track: list[dict], cfg: RenderConfig) -> list[dict]:
+    """
+    정지(stationary)로 분류된 포인트 중 주변 N개의 선형회귀 추세에서
+    크게 벗어난 것을 GPS 노이즈/이상치로 판단해 제거.
+
+    알고리즘:
+      1. 각 stationary 포인트 i에 대해 양쪽 이웃 N개 추출 (이미 outlier로 표시된 것은 제외)
+      2. 이웃들의 timestamp(epoch) → lat / lng 선형회귀
+      3. 회귀선으로 i 시점의 예측 (lat, lng) 산출
+      4. 실제 위치와 Haversine 거리 > max_deviation_m 이면 제거
+
+    Returns: 이상치를 제거한 새 트랙 리스트
+    """
+    if not cfg.outlier_filter_enabled or len(track) < 5:
+        return track
+
+    # timestamp → epoch (초 단위 float)
+    times: list[float] = []
+    for p in track:
+        try:
+            dt = datetime.fromisoformat(p["timestamp"].replace("Z", "+00:00"))
+            times.append(dt.timestamp())
+        except Exception:
+            times.append(0.0)
+
+    keep = [True] * len(track)
+    n_removed = 0
+    W   = cfg.outlier_window_size
+    THR = cfg.outlier_max_deviation_m
+
+    for i, pt in enumerate(track):
+        if (pt.get("activity") or "unknown") != "stationary":
+            continue
+
+        # 유효 이웃 인덱스 (자기 자신 제외 + 이미 제거된 것 제외)
+        lo = max(0, i - W)
+        hi = min(len(track), i + W + 1)
+        n_idx = [j for j in range(lo, hi) if j != i and keep[j]]
+        if len(n_idx) < 4:
+            continue
+
+        ts   = [times[j]          for j in n_idx]
+        lats = [track[j]["lat"]   for j in n_idx]
+        lngs = [track[j]["lng"]   for j in n_idx]
+
+        # timestamp가 동일한 경우 회귀 의미 없음
+        if max(ts) - min(ts) < 1.0:
+            continue
+
+        a_lat, b_lat = _linear_fit(ts, lats)
+        a_lng, b_lng = _linear_fit(ts, lngs)
+        pred_lat = a_lat * times[i] + b_lat
+        pred_lng = a_lng * times[i] + b_lng
+
+        if _haversine_m(pt["lat"], pt["lng"], pred_lat, pred_lng) > THR:
+            keep[i] = False
+            n_removed += 1
+
+    if n_removed > 0:
+        log.info(
+            "이상치 필터: stationary 포인트 %d개 제거 (window=%d, max_dev=%.0fm)",
+            n_removed, W, THR,
+        )
+    return [p for p, k in zip(track, keep) if k]
+
+
+# ──────────────────────────────────────────
+# Bearing (icon 회전 + 진행 방향)
+# ──────────────────────────────────────────
+
+def compute_bearing(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """좌표 1→2 진행 방향 (도, 0=북, 90=동)"""
+    rl1 = math.radians(lat1); rl2 = math.radians(lat2)
+    dlng = math.radians(lng2 - lng1)
+    x = math.sin(dlng) * math.cos(rl2)
+    y = math.cos(rl1) * math.sin(rl2) - math.sin(rl1) * math.cos(rl2) * math.cos(dlng)
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
+
 
 def compute_bbox(
     track: list[dict], cfg: RenderConfig, padding_factor: float = 1.0
@@ -491,33 +600,52 @@ def _draw_lines(
     visible: list[dict],
     frame_bbox: tuple[float, float, float, float],
     cfg: RenderConfig,
+    head: Optional[dict] = None,    # {"lat","lng","activity"} — 부분 segment 끝점 (애니메이션)
 ) -> None:
-    """이동 경로 선 — 연속 포인트 연결. 정지↔정지는 스킵."""
+    """
+    이동 경로 선 — 연속 포인트 연결 + 마지막 부분 segment(애니메이션).
+
+    head가 주어지면 visible[-1] → head 까지 부분 segment 추가 그림.
+    이게 fractional 인덱스 기반 부드러운 그리기 애니메이션의 핵심.
+    """
     n = len(visible)
-    if n < 2:
-        return
     a_range = cfg.trail_alpha_max - cfg.trail_alpha_min
 
+    # 기존 visible 점들의 segment
     for i in range(1, n):
         prev = visible[i - 1]
         curr = visible[i]
         pa = prev.get("activity") or "unknown"
         ca = curr.get("activity") or "unknown"
-
-        # 정지 ↔ 정지: 선 생략
         if pa == "stationary" and ca == "stationary":
             continue
-
         line_w = cfg.line_widths.get(ca, cfg.line_widths.get("unknown", 1))
         if line_w <= 0:
             continue
-
         color = cfg.activity_colors.get(ca, (200, 200, 200))
         alpha = int(cfg.trail_alpha_min + a_range * (i / max(n - 1, 1)))
-
         x1, y1 = latlng_to_pixel(prev["lat"], prev["lng"], frame_bbox, cfg.map_w, cfg.map_h)
         x2, y2 = latlng_to_pixel(curr["lat"], curr["lng"], frame_bbox, cfg.map_w, cfg.map_h)
         draw.line([(x1, y1), (x2, y2)], fill=(*color, alpha), width=line_w)
+
+    # head — visible[-1] → head 위치까지 부분 segment (애니메이션 핵심)
+    if head is not None and n > 0:
+        last = visible[-1]
+        ha = head.get("activity") or "unknown"
+        line_w = cfg.line_widths.get(ha, cfg.line_widths.get("unknown", 1))
+        # 정지 ↔ 정지가 아니면서 line_w > 0 인 경우만
+        if line_w > 0 and not (
+            (last.get("activity") or "unknown") == "stationary" and ha == "stationary"
+        ):
+            color = cfg.activity_colors.get(ha, (200, 200, 200))
+            x1, y1 = latlng_to_pixel(last["lat"], last["lng"], frame_bbox, cfg.map_w, cfg.map_h)
+            x2, y2 = latlng_to_pixel(head["lat"], head["lng"], frame_bbox, cfg.map_w, cfg.map_h)
+            if (x1, y1) != (x2, y2):
+                draw.line(
+                    [(x1, y1), (x2, y2)],
+                    fill=(*color, cfg.trail_alpha_max),
+                    width=line_w,
+                )
 
 
 def _draw_dots(
@@ -525,8 +653,9 @@ def _draw_dots(
     visible: list[dict],
     frame_bbox: tuple[float, float, float, float],
     cfg: RenderConfig,
+    skip_outline: bool = False,    # 아이콘이 head를 차지하면 외곽선 생략
 ) -> None:
-    """잔상 점 + 현재 위치 외곽선"""
+    """잔상 점 + (옵션) 현재 위치 외곽선"""
     n = len(visible)
     a_range = cfg.trail_alpha_max - cfg.trail_alpha_min
 
@@ -539,8 +668,7 @@ def _draw_dots(
         r = radius if i < n - 1 else radius * cfg.current_pt_scale + 1
         draw.ellipse([px - r, py - r, px + r, py + r], fill=(*color, alpha))
 
-    # 현재 위치 외곽선
-    if visible:
+    if not skip_outline and visible:
         curr   = visible[-1]
         px, py = latlng_to_pixel(curr["lat"], curr["lng"], frame_bbox, cfg.map_w, cfg.map_h)
         act    = curr.get("activity") or "unknown"
@@ -553,29 +681,130 @@ def _draw_dots(
         )
 
 
+# ──────────────────────────────────────────
+# 아이콘 로딩 / 합성
+# ──────────────────────────────────────────
+
+def load_icons(cfg: RenderConfig) -> dict[str, Image.Image]:
+    """
+    icon_dir 내 모든 PNG를 RGBA로 로드 + icon_size에 맞춰 종횡비 유지 리사이즈.
+    파일명(stem)을 key로 한 dict 반환.
+    """
+    icon_dir = Path(cfg.icon_dir)
+    if not icon_dir.exists():
+        log.warning("아이콘 폴더 없음: %s — 아이콘 비활성화", icon_dir)
+        return {}
+
+    out: dict[str, Image.Image] = {}
+    for f in sorted(icon_dir.glob("*.png")):
+        try:
+            img = Image.open(f).convert("RGBA")
+            ratio = cfg.icon_size / max(img.width, img.height)
+            new_size = (max(1, int(img.width * ratio)), max(1, int(img.height * ratio)))
+            out[f.stem] = img.resize(new_size, Image.LANCZOS)
+        except Exception as e:
+            log.warning("아이콘 로드 실패 %s: %s", f, e)
+
+    if out:
+        log.info("아이콘 로드: %d개 (%s)", len(out), ", ".join(sorted(out.keys())))
+    return out
+
+
+def _draw_icon_at(
+    img:        Image.Image,        # RGBA
+    lat:        float,
+    lng:        float,
+    bearing:    float,
+    activity:   str,
+    frame_bbox: tuple[float, float, float, float],
+    icons:      dict[str, Image.Image],
+    cfg:        RenderConfig,
+) -> None:
+    """head 위치에 활동별 아이콘 합성. 이동 활동은 옵션으로 bearing 회전."""
+    icon_name = cfg.activity_icons.get(activity)
+    if not icon_name:
+        return
+    icon = icons.get(icon_name)
+    if icon is None:
+        return
+
+    # 이동 활동만 회전 (회전 켰을 때)
+    if cfg.icon_rotate and activity in ("vehicle", "highway", "cycling", "flight"):
+        # PIL.rotate: 양수=반시계. compass bearing은 시계+북=0 → 양각으로 변환
+        # 아이콘이 위쪽(북쪽)을 향한다고 가정하면 -bearing
+        icon = icon.rotate(-bearing, resample=Image.BICUBIC, expand=True)
+
+    # 투명도 조정
+    if cfg.icon_alpha < 255:
+        a = icon.split()[3]
+        a = a.point(lambda p: int(p * cfg.icon_alpha / 255))
+        icon = icon.copy()
+        icon.putalpha(a)
+
+    px, py = latlng_to_pixel(lat, lng, frame_bbox, cfg.map_w, cfg.map_h)
+    iw, ih = icon.size
+    img.alpha_composite(icon, (px - iw // 2, py - ih // 2))
+
+
 def render_frame(
-    tile_cache  : "TileCache",
-    track       : list[dict],
-    up_to_idx   : int,
-    cfg         : RenderConfig,
+    tile_cache    : "TileCache",
+    track         : list[dict],
+    fractional_idx: float,                   # 정수가 아닌 부동소수점 인덱스 — 부드러운 애니메이션
+    cfg           : RenderConfig,
+    icons         : Optional[dict[str, Image.Image]] = None,
 ) -> tuple[Image.Image, tuple[float, float, float, float], int]:
     """
-    단일 프레임 렌더링 (타일 피라미드 + 적응형 줌).
+    단일 프레임 렌더링 (타일 피라미드 + 적응형 줌 + 보간 head + 아이콘).
 
-    1. visible trail 산출
-    2. 프레임 뷰포트 bbox + ideal_zoom 계산
-    3. 캐시된 타일들을 모자이크 합성 + AFFINE 서브픽셀 변환
-    4. 선(이동 경로) → 점(잔상) 순으로 오버레이
+    fractional_idx의 정수부 = 마지막 완전 표시 GPS 포인트
+    소수부 = 다음 포인트로 향하는 진행률 (0~1)
+
+    1. visible = track[start : floor(f)+1]  (완전 통과한 점들)
+    2. head    = visible[-1] → track[floor(f)+1] 사이 보간 위치 (애니메이션 끝점)
+    3. frame_bbox = visible + head 모두 포함되도록 동적 계산
+    4. 타일 합성 + 선/점 + 아이콘 (head에)
 
     Returns:
         (rendered_image, frame_bbox, zoom_used)
     """
     from tile_cache import composite_for_bbox, ideal_zoom_for_bbox
 
-    start   = max(0, up_to_idx - cfg.trail_len)
-    visible = track[start : up_to_idx + 1]
+    pt_idx       = int(fractional_idx)
+    seg_progress = fractional_idx - pt_idx       # 0.0 ~ 1.0
 
-    frame_bbox = compute_frame_viewport(visible, cfg)
+    start   = max(0, pt_idx - cfg.trail_len)
+    visible = track[start : pt_idx + 1]
+
+    # head 위치 보간 (애니메이션 핵심)
+    head_lat: float
+    head_lng: float
+    head_act: str
+    head_bearing: float = 0.0
+    head_dict: Optional[dict] = None
+
+    if visible:
+        head_lat = visible[-1]["lat"]
+        head_lng = visible[-1]["lng"]
+        head_act = visible[-1].get("activity") or "unknown"
+
+    if seg_progress > 1e-6 and pt_idx + 1 < len(track) and visible:
+        nxt = track[pt_idx + 1]
+        last = visible[-1]
+        head_lat = last["lat"] + seg_progress * (nxt["lat"] - last["lat"])
+        head_lng = last["lng"] + seg_progress * (nxt["lng"] - last["lng"])
+        # head 활동 = 진행 방향(다음) 활동
+        head_act = nxt.get("activity") or head_act
+        head_bearing = compute_bearing(last["lat"], last["lng"], nxt["lat"], nxt["lng"])
+        head_dict = {"lat": head_lat, "lng": head_lng, "activity": head_act}
+
+    # frame_bbox: visible + head 모두 포함하도록 (잘림 방지)
+    bbox_pts = list(visible)
+    if head_dict is not None:
+        bbox_pts = bbox_pts + [head_dict]
+    if not bbox_pts:
+        bbox_pts = [{"lat": 0.0, "lng": 0.0, "activity": "unknown"}]
+
+    frame_bbox = compute_frame_viewport(bbox_pts, cfg)
     zoom = ideal_zoom_for_bbox(
         frame_bbox, cfg.map_w, cfg.map_h, cfg.max_zoom, cfg.zoom_offset,
     )
@@ -585,9 +814,29 @@ def render_frame(
     img  = bg.convert("RGBA")
     draw = ImageDraw.Draw(img, "RGBA")
 
+    # 1. 선 (visible 본체 + head로 향하는 부분 segment)
     if cfg.draw_lines:
-        _draw_lines(draw, visible, frame_bbox, cfg)
-    _draw_dots(draw, visible, frame_bbox, cfg)
+        _draw_lines(draw, visible, frame_bbox, cfg, head=head_dict)
+
+    # 2. 점 (head에 아이콘이 들어갈 예정이면 외곽선 생략)
+    use_icon = bool(icons) and head_act in cfg.activity_icons
+    _draw_dots(draw, visible, frame_bbox, cfg, skip_outline=use_icon)
+
+    # 3. 아이콘 (head 위치에)
+    if use_icon and visible:
+        _draw_icon_at(img, head_lat, head_lng, head_bearing, head_act,
+                      frame_bbox, icons, cfg)
+    elif visible:
+        # 아이콘 없으면 기존 외곽선으로 head 표시
+        last = visible[-1]
+        px, py = latlng_to_pixel(head_lat, head_lng, frame_bbox, cfg.map_w, cfg.map_h)
+        base_r = cfg.activity_radius.get(head_act, 2)
+        r_out  = base_r * cfg.current_pt_scale + cfg.outline_extra_r
+        draw.ellipse(
+            [px - r_out, py - r_out, px + r_out, py + r_out],
+            outline=(*cfg.outline_color, cfg.outline_alpha),
+            width=2,
+        )
 
     return img.convert("RGB"), frame_bbox, zoom
 
@@ -754,6 +1003,9 @@ def render_frames(
     track = fetch_track(conn, start, end)
     conn.close()
 
+    # 이상치 필터 — stationary 포인트의 GPS 노이즈 제거
+    track = filter_outliers(track, cfg)
+
     period_slug = period_str.replace("~", "_")
     out_dir     = output_dir or Path(cfg.output_root) / period_slug / "frames"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -794,13 +1046,16 @@ def render_frames(
         provider     = cfg.provider,
     )
 
-    # 프레임 인덱스 사전 계산 (포인트 균등 분배)
+    # 프레임 인덱스 — fractional(float)로 부드러운 애니메이션 지원
     total_frames = cfg.duration_sec * cfg.fps
     n_points     = len(track)
-    indices      = [
-        int(i * (n_points - 1) / max(total_frames - 1, 1))
+    fractional_indices: list[float] = [
+        i * (n_points - 1) / max(total_frames - 1, 1)
         for i in range(total_frames)
     ]
+
+    # 아이콘 로드 (한 번)
+    icons = load_icons(cfg)
 
     # ── --verify: 대표 영역에 대해 검증 이미지 생성 후 종료 ────────────
     if verify:
@@ -821,13 +1076,27 @@ def render_frames(
     needed_tiles: set[tuple[int, int, int]] = set()
     zoom_histogram: dict[int, int] = {}
 
-    for pt_idx in indices:
+    for fp in fractional_indices:
+        pt_idx       = int(fp)
+        seg_progress = fp - pt_idx
         start    = max(0, pt_idx - cfg.trail_len)
         visible  = track[start : pt_idx + 1]
         if not visible:
             continue
-        fb       = compute_frame_viewport(visible, cfg)
-        zoom     = ideal_zoom_for_bbox(fb, cfg.map_w, cfg.map_h, cfg.max_zoom, cfg.zoom_offset)
+
+        # head 위치 보간 — viewport에 포함시켜 잘림 방지
+        bbox_pts = list(visible)
+        if seg_progress > 1e-6 and pt_idx + 1 < len(track):
+            nxt = track[pt_idx + 1]
+            last = visible[-1]
+            bbox_pts.append({
+                "lat": last["lat"] + seg_progress * (nxt["lat"] - last["lat"]),
+                "lng": last["lng"] + seg_progress * (nxt["lng"] - last["lng"]),
+                "activity": nxt.get("activity") or "unknown",
+            })
+
+        fb   = compute_frame_viewport(bbox_pts, cfg)
+        zoom = ideal_zoom_for_bbox(fb, cfg.map_w, cfg.map_h, cfg.max_zoom, cfg.zoom_offset)
         zoom_histogram[zoom] = zoom_histogram.get(zoom, 0) + 1
         for t in tiles_for_bbox(fb, zoom):
             needed_tiles.add(t)
@@ -841,14 +1110,16 @@ def render_frames(
 
     # ── 3단계: 프레임 렌더링 ──────────────────────────────────────
     log.info(
-        "렌더링 시작: %d프레임 | %d초@%dfps | GPS %d건 | trail %d | lines=%s",
+        "렌더링 시작: %d프레임 | %d초@%dfps | GPS %d건 | trail %d | lines=%s | icons=%d",
         total_frames, cfg.duration_sec, cfg.fps,
-        n_points, cfg.trail_len, cfg.draw_lines,
+        n_points, cfg.trail_len, cfg.draw_lines, len(icons),
     )
 
-    for frame_idx, pt_idx in enumerate(indices):
-        img, _frame_bbox, _z = render_frame(tile_cache, track, pt_idx, cfg)
-        img = draw_hud(img, track[pt_idx]["timestamp"], frame_idx, total_frames, cfg)
+    for frame_idx, fp in enumerate(fractional_indices):
+        img, _frame_bbox, _z = render_frame(tile_cache, track, fp, cfg, icons=icons)
+        # HUD 타임스탬프는 정수부 인덱스 기준
+        ts = track[int(fp)]["timestamp"]
+        img = draw_hud(img, ts, frame_idx, total_frames, cfg)
         img.save(out_dir / f"frame_{frame_idx:06d}.png")
 
         if frame_idx % 150 == 0 or frame_idx == total_frames - 1:

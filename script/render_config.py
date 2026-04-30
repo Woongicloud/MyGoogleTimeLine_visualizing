@@ -120,6 +120,27 @@ class RenderConfig:
         "unknown":    1,
     })
 
+    # ── 이상치 필터 (정지 포인트의 GPS 노이즈 제거) ─────
+    outlier_filter_enabled:  bool  = True
+    outlier_window_size:     int   = 10        # 선형회귀에 사용할 양쪽 이웃 수
+    outlier_max_deviation_m: float = 200.0     # 예측치 대비 허용 오차 (m)
+
+    # ── 아이콘 (이동수단 시각화) ─────────────────
+    icon_dir:        str  = "icon"         # 아이콘 PNG 폴더
+    icon_size:       int  = 64             # 아이콘 최대 변 크기 (px)
+    icon_alpha:      int  = 255            # 0~255 투명도
+    icon_rotate:     bool = False          # 차량/비행기 bearing 회전
+    activity_icons: dict = field(default_factory=lambda: {
+        # 활동 타입 → 아이콘 파일명 (확장자 제외)
+        "stationary": "walking",
+        "walking":    "walking",
+        "cycling":    "bicycle",
+        "vehicle":    "car",
+        "highway":    "car",
+        "flight":     "airplane",
+        "unknown":    "walking",
+    })
+
     # ── 교통수단 색상 (RGB) ─────────────────────
     activity_colors: dict = field(default_factory=lambda: {
         "stationary": (100, 100, 100),
@@ -234,6 +255,20 @@ def load_config(config_path: Optional[Path] = None) -> RenderConfig:
         cfg.activity_radius = {k: int(v) for k, v in raw["radius"].items()}
     if "line_width" in raw:
         cfg.line_widths = {k: int(v) for k, v in raw["line_width"].items()}
+
+    # outlier 필터
+    of = raw.get("outlier", {})
+    if "enabled"          in of: cfg.outlier_filter_enabled  = bool(of["enabled"])
+    if "window_size"      in of: cfg.outlier_window_size     = int(of["window_size"])
+    if "max_deviation_m"  in of: cfg.outlier_max_deviation_m = float(of["max_deviation_m"])
+
+    # icon 설정
+    ic = raw.get("icon", {})
+    if "dir"        in ic: cfg.icon_dir     = str(ic["dir"])
+    if "size"       in ic: cfg.icon_size    = int(ic["size"])
+    if "alpha"      in ic: cfg.icon_alpha   = int(ic["alpha"])
+    if "rotate"     in ic: cfg.icon_rotate  = bool(ic["rotate"])
+    if "mapping"    in ic: cfg.activity_icons = {k: str(v) for k, v in ic["mapping"].items()}
 
     # hud 섹션
     h = raw.get("hud", {})
