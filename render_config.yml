@@ -67,19 +67,29 @@ trail:
 
 # ── 교통수단별 점 색상 (RGB) ──────────────────────────────────────────────────
 colors:
-  stationary: [100, 100, 100]   # 회색   — 정지 상태
-  walking:    [ 34, 197,  94]   # 초록   — 도보
-  cycling:    [ 59, 130, 246]   # 파랑   — 자전거
-  vehicle:    [249, 115,  22]   # 주황   — 차량 (일반 도로)
-  highway:    [239,  68,  68]   # 빨강   — 고속도로
-  flight:     [168,  85, 247]   # 보라   — 비행기
+  stationary: [100, 100, 100]   # 회색       — 정지
+  walking:    [ 34, 197,  94]   # 초록       — 도보
+  running:    [ 16, 185, 129]   # 진한 초록  — 달리기
+  cycling:    [ 59, 130, 246]   # 파랑       — 자전거
+  car:        [249, 115,  22]   # 주황       — 자가용
+  taxi:       [250, 204,  21]   # 노랑       — 택시
+  bus:        [139,  92, 246]   # 보라       — 버스
+  subway:     [236,  72, 153]   # 핫핑크     — 지하철
+  train:      [220,  38,  38]   # 진한 빨강  — 기차
+  highway:    [239,  68,  68]   # 빨강       — 고속도로
+  flight:     [168,  85, 247]   # 보라       — 비행기
 
 # ── 교통수단별 점 반경 (px, 기본 크기 기준) ───────────────────────────────────
 radius:
   stationary: 2
   walking:    3
+  running:    3
   cycling:    4
-  vehicle:    4
+  car:        4
+  taxi:       4
+  bus:        5
+  subway:     5
+  train:      6
   highway:    5
   flight:     6
 
@@ -88,10 +98,34 @@ radius:
 line_width:
   stationary: 0   # 정지 구간은 선 없음
   walking:    2
+  running:    2
   cycling:    2
-  vehicle:    3
-  highway:    3
+  car:        3
+  taxi:       3
+  bus:        3
+  subway:     3
+  train:      4
+  highway:    4
   flight:     2
+
+# ── 이동수단 세분화 — vehicle/highway 를 car/bus/subway/train 등으로 재분류 ──
+# subway: 시간 갭 + 위치 점프 (지하 GPS 손실)
+# train:  지속적 고속 주행 (윈도우 평균속도 기준)
+refine:
+  enabled: true
+  subway_gap_sec: 60        # 이전 포인트와 N초 이상 간격
+  subway_jump_m:  300       #   + 위치 점프 N미터 이상 → subway
+  train_min_speed: 25       # 윈도우 평균속도 ≥ N m/s → train
+  train_window: 5           # 지속성 검사 윈도우 크기
+  # 속도 임계값 (m/s, 각 활동의 상한선)
+  speed_thresholds:
+    stationary: 0.5
+    walking:    2.0
+    running:    4.5
+    cycling:    8.0
+    car:        25.0
+    highway:    90.0
+    # > 90: flight
 
 # ── 이상치 필터 (정지 포인트 GPS 노이즈 제거) ────────────────────────────────
 # stationary 활동으로 분류된 포인트 중 주변 trend(선형회귀)에서 벗어난
@@ -111,13 +145,19 @@ icon:
   rotate: false       # true 시 진행 방향(bearing)으로 아이콘 회전
                       # 단, 아이콘이 위쪽을 향하도록 디자인된 경우만 자연스러움
   mapping:
-    stationary: walking      # 정지 구간 (선택: 미사용 시 walking 폴백)
+    stationary: walking
     walking:    walking
+    running:    running
     cycling:    bicycle
-    vehicle:    car
-    highway:    car          # 고속도로 — train 으로 변경 가능
+    car:        car
+    taxi:       taxi
+    bus:        bus
+    subway:     subway
+    train:      train
+    highway:    car          # 고속도로 차량 (train 으로 변경 가능)
     flight:     airplane
     unknown:    walking
+    vehicle:    car          # 하위 호환
 
 # ── HUD (날짜/시각 + 진행 바) ─────────────────────────────────────────────────
 hud:
@@ -142,5 +182,5 @@ hud:
 render:
   duration_sec: 60   # 기본 출력 영상 길이 (초) — CLI --duration 으로 덮어씀
   fps:          30   # 기본 프레임 레이트 — CLI --fps 로 덮어씀
-  db_path:      "timeline.db"   # SQLite DB 경로
+  db_path:      "db/timeline.db"   # SQLite DB 경로
   output_root:  "output"        # PNG 시퀀스 출력 루트 폴더

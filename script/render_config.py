@@ -113,17 +113,40 @@ class RenderConfig:
     line_widths: dict = field(default_factory=lambda: {
         "stationary": 0,    # 0 = 선 안 그림
         "walking":    2,
+        "running":    2,
         "cycling":    2,
-        "vehicle":    3,
-        "highway":    3,
+        "car":        3,
+        "taxi":       3,
+        "bus":        3,
+        "subway":     3,
+        "train":      4,
+        "highway":    4,
         "flight":     2,
         "unknown":    1,
+        "vehicle":    3,
     })
 
     # ── 이상치 필터 (정지 포인트의 GPS 노이즈 제거) ─────
     outlier_filter_enabled:  bool  = True
     outlier_window_size:     int   = 10        # 선형회귀에 사용할 양쪽 이웃 수
     outlier_max_deviation_m: float = 200.0     # 예측치 대비 허용 오차 (m)
+
+    # ── 이동수단 세분화 (subway/train/car 등 재분류) ─────
+    refine_modes_enabled:    bool  = True
+    refine_subway_gap_sec:   float = 60.0      # 시간 갭 N초 + 위치 점프 → subway
+    refine_subway_jump_m:    float = 300.0
+    refine_train_min_speed:  float = 25.0      # 윈도우 평균속도 ≥ N m/s = train
+    refine_train_window:     int   = 5         # 지속성 검사 윈도우 크기
+    # 속도 임계값 (m/s, 각 활동의 상한선)
+    refine_speed_thresholds: dict = field(default_factory=lambda: {
+        "stationary":  0.5,
+        "walking":     2.0,
+        "running":     4.5,
+        "cycling":     8.0,
+        "car":         25.0,
+        "highway":     90.0,
+        # > 90: flight
+    })
 
     # ── 아이콘 (이동수단 시각화) ─────────────────
     icon_dir:        str  = "icon"         # 아이콘 PNG 폴더
@@ -134,33 +157,53 @@ class RenderConfig:
         # 활동 타입 → 아이콘 파일명 (확장자 제외)
         "stationary": "walking",
         "walking":    "walking",
+        "running":    "running",
         "cycling":    "bicycle",
-        "vehicle":    "car",
-        "highway":    "car",
+        "car":        "car",
+        "taxi":       "taxi",
+        "bus":        "bus",
+        "subway":     "subway",
+        "train":      "train",
+        "highway":    "car",     # 고속도로 = 차량 (필요시 train 으로 변경)
         "flight":     "airplane",
         "unknown":    "walking",
+        # 하위 호환
+        "vehicle":    "car",
     })
 
     # ── 교통수단 색상 (RGB) ─────────────────────
     activity_colors: dict = field(default_factory=lambda: {
         "stationary": (100, 100, 100),
         "walking":    ( 34, 197,  94),
+        "running":    ( 16, 185, 129),    # 더 진한 초록
         "cycling":    ( 59, 130, 246),
-        "vehicle":    (249, 115,  22),
-        "highway":    (239,  68,  68),
-        "flight":     (168,  85, 247),
+        "car":        (249, 115,  22),    # 주황 (기본 차량)
+        "taxi":       (250, 204,  21),    # 노랑
+        "bus":        (139,  92, 246),    # 보라
+        "subway":     (236,  72, 153),    # 핫핑크 (지하)
+        "train":      (220,  38,  38),    # 진한 빨강 (기차)
+        "highway":    (239,  68,  68),    # 빨강 (고속도로)
+        "flight":     (168,  85, 247),    # 보라 (비행)
         "unknown":    (200, 200, 200),
+        # 하위 호환 — 파서 기본 출력
+        "vehicle":    (249, 115,  22),
     })
 
     # ── 교통수단 점 반경 (px) ───────────────────
     activity_radius: dict = field(default_factory=lambda: {
         "stationary": 2,
         "walking":    3,
+        "running":    3,
         "cycling":    4,
-        "vehicle":    4,
+        "car":        4,
+        "taxi":       4,
+        "bus":        5,
+        "subway":     5,
+        "train":      6,
         "highway":    5,
         "flight":     6,
         "unknown":    2,
+        "vehicle":    4,
     })
 
     # ── HUD ─────────────────────────────────────
@@ -261,6 +304,16 @@ def load_config(config_path: Optional[Path] = None) -> RenderConfig:
     if "enabled"          in of: cfg.outlier_filter_enabled  = bool(of["enabled"])
     if "window_size"      in of: cfg.outlier_window_size     = int(of["window_size"])
     if "max_deviation_m"  in of: cfg.outlier_max_deviation_m = float(of["max_deviation_m"])
+
+    # refine (이동수단 세분화)
+    rf = raw.get("refine", {})
+    if "enabled"        in rf: cfg.refine_modes_enabled    = bool(rf["enabled"])
+    if "subway_gap_sec" in rf: cfg.refine_subway_gap_sec   = float(rf["subway_gap_sec"])
+    if "subway_jump_m"  in rf: cfg.refine_subway_jump_m    = float(rf["subway_jump_m"])
+    if "train_min_speed" in rf: cfg.refine_train_min_speed = float(rf["train_min_speed"])
+    if "train_window"   in rf: cfg.refine_train_window     = int(rf["train_window"])
+    if "speed_thresholds" in rf:
+        cfg.refine_speed_thresholds = {k: float(v) for k, v in rf["speed_thresholds"].items()}
 
     # icon 설정
     ic = raw.get("icon", {})

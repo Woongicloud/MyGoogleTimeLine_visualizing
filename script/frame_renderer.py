@@ -225,6 +225,128 @@ def filter_outliers(track: list[dict], cfg: RenderConfig) -> list[dict]:
 
 
 # ──────────────────────────────────────────
+# 이동수단 세분화 (subway / train / car / running 등 재분류)
+# ──────────────────────────────────────────
+
+# 속도 임계값 적용 시 평가 순서 (오름차순) — config 에서 가져온 dict를 순서화
+_REFINE_BANDS_ORDER = ("stationary", "walking", "running", "cycling", "car", "highway")
+
+
+def _classify_by_speed(speed_ms: Optional[float], thresholds: dict) -> str:
+    """속도 → 활동 라벨 (config의 refine_speed_thresholds 사용)"""
+    if speed_ms is None:
+        return "stationary"
+    s = float(speed_ms)
+    if s < thresholds.get("stationary", 0.5):
+        return "stationary"
+    if s < thresholds.get("walking", 2.0):
+        return "walking"
+    if s < thresholds.get("running", 4.5):
+        return "running"
+    if s < thresholds.get("cycling", 8.0):
+        return "cycling"
+    if s < thresholds.get("car", 25.0):
+        return "car"
+    if s < thresholds.get("highway", 90.0):
+        return "highway"
+    return "flight"
+
+
+def refine_transport_modes(track: list[dict], cfg: RenderConfig) -> list[dict]:
+    """
+    이동수단 라벨을 세분화 — 파서의 vehicle/highway 분류를
+    car / bus / subway / train / highway 등으로 재분류.
+
+    감지 알고리즘:
+      Pass 1 (시간 갭 → subway):
+        이전 포인트와 시간 차이 > N초 + 거리 점프 > N미터
+        → 지하철 터널에서 GPS 손실 패턴
+
+      Pass 2 (지속 고속 → train):
+        윈도우 W 내 평균속도 ≥ M m/s
+        → 일관된 고속 = 기차/철도
+
+      Pass 3 (속도 기반 기본 분류):
+        cfg.refine_speed_thresholds 의 임계값으로 라벨 결정
+
+    Returns: 새 활동 라벨이 적용된 트랙 리스트
+    """
+    if not cfg.refine_modes_enabled or len(track) < 2:
+        return track
+
+    # 시간(epoch) 사전 계산
+    times: list[float] = []
+    for p in track:
+        try:
+            dt = datetime.fromisoformat(p["timestamp"].replace("Z", "+00:00"))
+            times.append(dt.timestamp())
+        except Exception:
+            times.append(times[-1] if times else 0.0)
+
+    n = len(track)
+    SUBWAY_GAP  = cfg.refine_subway_gap_sec
+    SUBWAY_DIST = cfg.refine_subway_jump_m
+    TRAIN_MIN   = cfg.refine_train_min_speed
+    TRAIN_WIN   = max(3, cfg.refine_train_window)
+
+    # ── Pass 1: subway 감지 ────────────────────────
+    is_subway = [False] * n
+    for i in range(1, n):
+        dt_sec = times[i] - times[i - 1]
+        if dt_sec < SUBWAY_GAP:
+            continue
+        dist_m = _haversine_m(
+            track[i - 1]["lat"], track[i - 1]["lng"],
+            track[i]["lat"],     track[i]["lng"],
+        )
+        if dist_m > SUBWAY_DIST:
+            is_subway[i] = True
+
+    # ── Pass 2: train 감지 (지속 평균속도) ────────
+    is_train = [False] * n
+    half = TRAIN_WIN // 2
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        speeds: list[float] = []
+        for j in range(lo, hi):
+            if is_subway[j]:
+                continue
+            s = track[j].get("speed_ms")
+            if s is not None and s > 0:
+                speeds.append(float(s))
+        if len(speeds) >= TRAIN_WIN - 1 and speeds:
+            avg = sum(speeds) / len(speeds)
+            if avg >= TRAIN_MIN:
+                is_train[i] = True
+
+    # ── Pass 3: 적용 ─────────────────────────────
+    counts: dict[str, int] = {}
+    new_track: list[dict] = []
+    for i, pt in enumerate(track):
+        new_pt = dict(pt)
+
+        if is_subway[i]:
+            new_act = "subway"
+        else:
+            base = _classify_by_speed(pt.get("speed_ms"), cfg.refine_speed_thresholds)
+            # train 후처리 — 차량/고속 영역에서만 train 으로 승격
+            if is_train[i] and base in ("car", "highway"):
+                new_act = "train"
+            else:
+                new_act = base
+
+        new_pt["activity"] = new_act
+        counts[new_act] = counts.get(new_act, 0) + 1
+        new_track.append(new_pt)
+
+    # 결과 로그
+    summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items(), key=lambda x: -x[1]))
+    log.info("이동수단 세분화: %s", summary)
+    return new_track
+
+
+# ──────────────────────────────────────────
 # Bearing (icon 회전 + 진행 방향)
 # ──────────────────────────────────────────
 
@@ -1005,6 +1127,9 @@ def render_frames(
 
     # 이상치 필터 — stationary 포인트의 GPS 노이즈 제거
     track = filter_outliers(track, cfg)
+
+    # 이동수단 세분화 — vehicle/highway → car/bus/subway/train 재분류
+    track = refine_transport_modes(track, cfg)
 
     period_slug = period_str.replace("~", "_")
     out_dir     = output_dir or Path(cfg.output_root) / period_slug / "frames"

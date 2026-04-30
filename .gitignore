@@ -24,7 +24,7 @@ venv.bak/
 .DS_Store
 
 # User Specific Exclusions (Requested)
-data/
-db/
-output/
+data/*
+db/*
+output/*
 *.db
