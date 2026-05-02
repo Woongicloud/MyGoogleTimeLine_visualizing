@@ -30,7 +30,9 @@ from typing import Optional, Iterable
 
 # render_config는 같은 script/ 디렉터리에 있으므로 경로 추가
 sys.path.insert(0, str(Path(__file__).parent))
-from render_config import RenderConfig, TILE_PROVIDERS, PROVIDER_NAMES, load_config
+from render_config import (
+    RenderConfig, TILE_PROVIDERS, PROVIDER_NAMES, load_config, parse_duration_str,
+)
 
 from dotenv import load_dotenv
 import requests
@@ -343,6 +345,61 @@ def refine_transport_modes(track: list[dict], cfg: RenderConfig) -> list[dict]:
     # 결과 로그
     summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items(), key=lambda x: -x[1]))
     log.info("이동수단 세분화: %s", summary)
+    return new_track
+
+
+# ──────────────────────────────────────────
+# 시간 그리드 다운샘플링
+# ──────────────────────────────────────────
+
+def _epoch_seconds(p: dict) -> float:
+    """포인트의 timestamp(ISO 8601) → epoch 초. 실패 시 0.0."""
+    try:
+        return datetime.fromisoformat(p["timestamp"].replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def downsample_by_time(track: list[dict], step_sec: float) -> list[dict]:
+    """
+    시간 그리드 다운샘플링 — 정지 구간 압축.
+
+    트랙 시작 시각으로부터 step_sec 간격의 그리드를 만들고, 각 그리드 셀 내부의
+    포인트 중 셀 시작점에 가장 가까운 1개만 채택한다. 결과적으로 정지 구간의
+    중복 포인트가 압축되며, 영상이 시간에 비례하도록 균질해진다.
+
+    이상치 필터·이동수단 세분화 후에 호출해야 함 (속도/시간 갭 분석은 원본 필요).
+
+    Args:
+        track:    GPS 포인트 리스트 (timestamp 순 정렬)
+        step_sec: 그리드 간격(초). 0 이하면 다운샘플링 생략.
+
+    Returns:
+        다운샘플링된 새 트랙 리스트.
+    """
+    if step_sec <= 0 or len(track) < 2:
+        return track
+
+    epochs = [_epoch_seconds(p) for p in track]
+    t0     = epochs[0]
+
+    # 각 포인트의 버킷 인덱스 → 셀 시작점에 가장 가까운 포인트 채택
+    selected: dict[int, tuple[int, float]] = {}   # bucket → (track_idx, distance)
+    for i, t in enumerate(epochs):
+        bucket = int((t - t0) / step_sec)
+        center = t0 + bucket * step_sec
+        d      = abs(t - center)
+        if bucket not in selected or d < selected[bucket][1]:
+            selected[bucket] = (i, d)
+
+    keep_indices = sorted(v[0] for v in selected.values())
+    new_track    = [track[i] for i in keep_indices]
+
+    log.info(
+        "시간 다운샘플링: %d → %d 포인트 (step=%.0fs, %.1f%% 감소)",
+        len(track), len(new_track), step_sec,
+        (1 - len(new_track) / max(len(track), 1)) * 100,
+    )
     return new_track
 
 
@@ -1131,6 +1188,35 @@ def render_frames(
     # 이동수단 세분화 — vehicle/highway → car/bus/subway/train 재분류
     track = refine_transport_modes(track, cfg)
 
+    # ── realtime_speed 적용 — 데이터 시간 범위 기준 영상 길이 재계산 ─
+    # (다운샘플링 *전* 시간 범위 사용: 사용자 의도는 원본 데이터 범위)
+    if cfg.realtime_speed_sec > 0:
+        t_first = _epoch_seconds(track[0])
+        t_last  = _epoch_seconds(track[-1])
+        span    = max(t_last - t_first, 1.0)
+        new_dur = span / cfg.realtime_speed_sec
+        log.info(
+            "realtime_speed=%.0fs/s → 데이터 시간 %.0fs → 영상 길이 %ds → %.1fs",
+            cfg.realtime_speed_sec, span, cfg.duration_sec, new_dur,
+        )
+        cfg.duration_sec = max(int(round(new_dur)), 1)
+
+    # ── speed_factor 적용 — 영상 길이 배율 조정 ─────────────────────
+    if cfg.speed_factor and cfg.speed_factor != 1.0:
+        if cfg.speed_factor <= 0:
+            log.error("speed_factor는 양수여야 합니다: %s", cfg.speed_factor)
+            sys.exit(1)
+        new_dur = cfg.duration_sec / cfg.speed_factor
+        log.info(
+            "speed=%.2fx → 영상 길이 %ds → %.1fs",
+            cfg.speed_factor, cfg.duration_sec, new_dur,
+        )
+        cfg.duration_sec = max(int(round(new_dur)), 1)
+
+    # ── 시간 그리드 다운샘플링 — 정지 구간 압축 ─────────────────────
+    if cfg.time_step_sec > 0:
+        track = downsample_by_time(track, cfg.time_step_sec)
+
     period_slug = period_str.replace("~", "_")
     out_dir     = output_dir or Path(cfg.output_root) / period_slug / "frames"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1299,6 +1385,12 @@ def main() -> None:
                     help="프레임 레이트 (기본: render_config.yml 값 또는 30)")
     ap.add_argument("--trail",    type=int,  default=None,
                     help="잔상 최대 점 개수 (기본: render_config.yml 값 또는 300)")
+    ap.add_argument("--speed",    type=float, default=None, metavar="N",
+                    help="영상 속도 배율 (예: 2.0=2배 빠름, 0.5=2배 느림). --realtime-speed 와 동시 사용 불가")
+    ap.add_argument("--realtime-speed", dest="realtime_speed", default=None, metavar="DUR",
+                    help="영상 1초당 진행할 실제 시간 (예: '1h', '5m', '60s'). --speed 와 동시 사용 불가")
+    ap.add_argument("--time-step", dest="time_step", default=None, metavar="DUR",
+                    help="GPS 포인트 시간 간격 다운샘플링 (예: '60s', '5m'). 정지 구간 압축")
     ap.add_argument("--verify",   action="store_true",
                     help="기준점 검증 모드 — World Canvas + 9개 십자가 마커만 생성 후 종료")
     args = ap.parse_args()
@@ -1318,6 +1410,17 @@ def main() -> None:
     if args.duration: cfg.duration_sec = args.duration
     if args.fps:      cfg.fps          = args.fps
     if args.trail:    cfg.trail_len    = args.trail
+
+    # 4. 재생 속도 / 다운샘플링
+    if args.speed is not None and args.realtime_speed is not None:
+        log.error("--speed 와 --realtime-speed 는 동시에 사용할 수 없습니다.")
+        sys.exit(1)
+    if args.speed is not None:
+        cfg.speed_factor = args.speed
+    if args.realtime_speed is not None:
+        cfg.realtime_speed_sec = parse_duration_str(args.realtime_speed)
+    if args.time_step is not None:
+        cfg.time_step_sec = parse_duration_str(args.time_step)
 
     render_frames(
         period_str = args.period,

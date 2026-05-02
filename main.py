@@ -40,7 +40,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "script"))
 
 # 모듈 임포트 (Phase 별)
 from timeline_parser  import run as parser_run, init_db, get_summary       # Phase 1
-from render_config    import load_config, RenderConfig, PROVIDER_NAMES     # Phase 2 설정
+from render_config    import (
+    load_config, RenderConfig, PROVIDER_NAMES, parse_duration_str,
+)                                                                           # Phase 2 설정
 from frame_renderer   import render_frames                                 # Phase 2
 from video_encoder    import encode as encoder_encode                      # Phase 3
 
@@ -93,6 +95,34 @@ def _apply_render_overrides(cfg: RenderConfig, args: argparse.Namespace) -> Rend
     if getattr(args, "duration", None) is not None: cfg.duration_sec = args.duration
     if getattr(args, "fps", None)      is not None: cfg.fps          = args.fps
     if getattr(args, "trail", None)    is not None: cfg.trail_len    = args.trail
+
+    # 재생 속도 — --speed / --realtime-speed 동시 지정 불가
+    speed = getattr(args, "speed", None)
+    rt    = getattr(args, "realtime_speed", None)
+    if speed is not None and rt is not None:
+        log.error("--speed 와 --realtime-speed 는 동시에 사용할 수 없습니다.")
+        sys.exit(1)
+    if speed is not None:
+        if speed <= 0:
+            log.error("--speed 는 양수여야 합니다: %s", speed)
+            sys.exit(1)
+        cfg.speed_factor = speed
+    if rt is not None:
+        try:
+            cfg.realtime_speed_sec = parse_duration_str(rt)
+        except ValueError as e:
+            log.error("--realtime-speed 파싱 실패: %s", e)
+            sys.exit(1)
+
+    # 시간 그리드 다운샘플링
+    ts = getattr(args, "time_step", None)
+    if ts is not None:
+        try:
+            cfg.time_step_sec = parse_duration_str(ts)
+        except ValueError as e:
+            log.error("--time-step 파싱 실패: %s", e)
+            sys.exit(1)
+
     return cfg
 
 
@@ -208,6 +238,33 @@ def _add_render_args(p: argparse.ArgumentParser, include_period: bool = True) ->
     p.add_argument(
         "--trail", type=int, default=None, metavar="N",
         help="잔상으로 표시할 최대 이전 포인트 수 (기본: 300)",
+    )
+    p.add_argument(
+        "--speed", type=float, default=None, metavar="N",
+        help=(
+            "영상 속도 배율 (기본: 1.0)\n"
+            "  · 2.0 = 2배 빠름 (duration 절반)\n"
+            "  · 0.5 = 2배 느림 (duration 두 배)\n"
+            "  · --realtime-speed 와 동시 사용 불가"
+        ),
+    )
+    p.add_argument(
+        "--realtime-speed", dest="realtime_speed", default=None, metavar="DUR",
+        help=(
+            "영상 1초당 진행할 실제 시간 (예: '1h' = 1초당 1시간)\n"
+            "  · 단위: s/m/h/d\n"
+            "  · 데이터 시간 범위와 무관하게 일정한 체감 속도 보장\n"
+            "  · --speed 와 동시 사용 불가"
+        ),
+    )
+    p.add_argument(
+        "--time-step", dest="time_step", default=None, metavar="DUR",
+        help=(
+            "GPS 포인트 시간 간격 다운샘플링 (예: '60s', '5m', '1h')\n"
+            "  · 단위: s/m/h/d\n"
+            "  · 정지 구간 압축 — 이동 구간 강조\n"
+            "  · 미설정 시 모든 포인트 사용"
+        ),
     )
 
 

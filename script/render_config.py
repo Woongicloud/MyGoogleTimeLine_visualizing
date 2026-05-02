@@ -40,6 +40,52 @@ PROVIDER_NAMES = ", ".join(TILE_PROVIDERS.keys())
 
 
 # ──────────────────────────────────────────
+# 시간 문자열 파서 — '60s' / '5m' / '1h' / '1d' → 초(float)
+# ──────────────────────────────────────────
+
+def parse_duration_str(value) -> float:
+    """
+    시간 표기 문자열을 초 단위 float로 변환.
+
+    허용 형식:
+        - 숫자(int/float): 그대로 초로 간주
+        - "60s" / "5m" / "1h" / "1d": 단위 접미사
+        - "60": 단위 없으면 초로 간주
+        - "" / None / 0 / "0": 0.0 (비활성)
+
+    Args:
+        value: 사용자 입력값 (문자열/숫자/None)
+
+    Returns:
+        초 단위 float. 비활성/0이면 0.0.
+
+    Raises:
+        ValueError: 파싱 실패
+    """
+    if value is None or value == "" or value == 0:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    s = str(value).strip().lower()
+    if not s or s == "0":
+        return 0.0
+
+    multipliers = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}
+    suffix = s[-1]
+    if suffix in multipliers:
+        try:
+            return float(s[:-1]) * multipliers[suffix]
+        except ValueError as e:
+            raise ValueError(f"잘못된 시간 형식: {value!r} (예: '60s', '5m', '1h')") from e
+
+    try:
+        return float(s)   # 단위 없으면 초로 간주
+    except ValueError as e:
+        raise ValueError(f"잘못된 시간 형식: {value!r} (예: '60s', '5m', '1h')") from e
+
+
+# ──────────────────────────────────────────
 # 하위 설정 데이터클래스
 # ──────────────────────────────────────────
 
@@ -215,6 +261,18 @@ class RenderConfig:
     db_path:      str = "timeline.db"
     output_root:  str = "output"
 
+    # ── 재생 속도 / 데이터 다운샘플링 ─────────────
+    # speed_factor:        영상 속도 배율 (1.0=기본, 2.0=2배 빠름)
+    #                      → duration = duration_sec / speed_factor
+    # realtime_speed_sec:  영상 1초당 진행할 실제 시간(초). 0=비활성.
+    #                      → duration = (실제 데이터 시간 범위) / realtime_speed_sec
+    #                      → speed_factor 와 동시 사용 불가
+    # time_step_sec:       GPS 포인트 시간 그리드 다운샘플링 간격(초). 0=비활성.
+    #                      → 정지 구간 압축 효과
+    speed_factor:        float = 1.0
+    realtime_speed_sec:  float = 0.0
+    time_step_sec:       float = 0.0
+
     def resolve_token(self) -> None:
         """환경변수 → 설정값 순서로 API 키 적용"""
         self.mapbox_token   = os.getenv("MAPBOX_TOKEN",   self.mapbox_token)
@@ -349,6 +407,12 @@ def load_config(config_path: Optional[Path] = None) -> RenderConfig:
     if "fps"          in r: cfg.fps           = int(r["fps"])
     if "db_path"      in r: cfg.db_path       = str(r["db_path"])
     if "output_root"  in r: cfg.output_root   = str(r["output_root"])
+
+    # playback 섹션 (재생 속도 / 다운샘플링)
+    pb = raw.get("playback", {})
+    if "speed"          in pb: cfg.speed_factor       = float(pb["speed"])
+    if "realtime_speed" in pb: cfg.realtime_speed_sec = parse_duration_str(pb["realtime_speed"])
+    if "time_step"      in pb: cfg.time_step_sec      = parse_duration_str(pb["time_step"])
 
     cfg.resolve_token()
     return cfg
