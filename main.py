@@ -60,12 +60,13 @@ def cmd_parse(args: argparse.Namespace) -> None:
     if not json_path.exists():
         log.error("파일 없음: %s", json_path)
         sys.exit(1)
-    parser_run(json_path)
+    db_path = Path(args.db) if getattr(args, "db", None) else Path("db/timeline.db")
+    parser_run(json_path, db_path=db_path)
 
 
 def cmd_summary(args: argparse.Namespace) -> None:
     """DB 요약 통계 출력 — 월별 분포 + 교통수단 분포"""
-    db = Path(args.db) if args.db else Path("timeline.db")
+    db = Path(args.db) if getattr(args, "db", None) else Path("db/timeline.db")
     if not db.exists():
         log.error("DB 없음: %s", db)
         log.error("먼저 파싱을 실행하세요: python main.py parse <json_path>")
@@ -95,6 +96,22 @@ def _apply_render_overrides(cfg: RenderConfig, args: argparse.Namespace) -> Rend
     if getattr(args, "duration", None) is not None: cfg.duration_sec = args.duration
     if getattr(args, "fps", None)      is not None: cfg.fps          = args.fps
     if getattr(args, "trail", None)    is not None: cfg.trail_len    = args.trail
+
+    # 시간 기준 trail
+    tt = getattr(args, "trail_time", None)
+    if tt is not None:
+        try:
+            cfg.trail_time_sec = parse_duration_str(tt)
+        except ValueError as e:
+            log.error("--trail-time 파싱 실패: %s", e)
+            sys.exit(1)
+
+    # 정지 포인트 압축
+    if getattr(args, "compress_stationary", False):
+        cfg.compress_stationary_enabled = True
+    cr = getattr(args, "compress_radius", None)
+    if cr is not None:
+        cfg.compress_stationary_radius_m = cr
 
     # 재생 속도 — --speed / --realtime-speed 동시 지정 불가
     speed = getattr(args, "speed", None)
@@ -160,13 +177,13 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
     log.info("══════════════════════════════════════════════")
 
     # ── Phase 1: Parse (JSON 제공 + DB 없을 때만) ───────────
-    db_path = Path("timeline.db")
+    db_path = Path("db/timeline.db")
     if args.json_path:
         if db_path.exists() and not args.force_parse:
             log.info("[Phase 1] DB가 이미 존재 → 파싱 생략 (--force-parse 로 재실행)")
         else:
             log.info("[Phase 1] 파싱 시작: %s", args.json_path)
-            parser_run(Path(args.json_path))
+            parser_run(Path(args.json_path), db_path=db_path)
     elif not db_path.exists():
         log.error("DB가 없습니다. --json 으로 JSON 경로를 지정하거나 먼저 parse를 실행하세요")
         sys.exit(1)
@@ -266,6 +283,35 @@ def _add_render_args(p: argparse.ArgumentParser, include_period: bool = True) ->
             "  · 미설정 시 모든 포인트 사용"
         ),
     )
+    p.add_argument(
+        "--trail-time", dest="trail_time", default=None, metavar="DUR",
+        help=(
+            "시간 기준 잔상 길이 (예: '5m', '300s')\n"
+            "  · 단위: s/m/h/d\n"
+            "  · 현재 위치에서 N초 이내 포인트만 잔상으로 표시\n"
+            "  · GPS 샘플링 밀도와 무관하게 체감 잔상 길이 일정\n"
+            "  · 미설정 시 --trail (점 개수 기준) 사용"
+        ),
+    )
+    p.add_argument(
+        "--compress-stationary", dest="compress_stationary",
+        action="store_true", default=False,
+        help=(
+            "정지 포인트 공간 압축 활성화\n"
+            "  · 집·회사 등 체류 중 반경 내 중복 포인트 → 1개로 축소\n"
+            "  · 반경은 --compress-radius 로 조정 (기본: 100m)\n"
+            "  · render_config.yml compress_stationary.enabled=true 와 동일"
+        ),
+    )
+    p.add_argument(
+        "--compress-radius", dest="compress_radius",
+        type=float, default=None, metavar="M",
+        help=(
+            "정지 포인트 압축 반경(m) (기본: 100)\n"
+            "  · --compress-stationary 와 함께 사용\n"
+            "  · 예: --compress-radius 50  (더 작은 클러스터로 압축)"
+        ),
+    )
 
 
 def _add_encode_args(p: argparse.ArgumentParser, include_period: bool = True) -> None:
@@ -345,6 +391,10 @@ def build_parser() -> argparse.ArgumentParser:
         "json_path",
         help="Google Takeout 타임라인 JSON 파일 경로 (timelineEdits 형식 지원)",
     )
+    pp.add_argument(
+        "--db", default=None, metavar="FILE",
+        help="SQLite DB 경로 (기본: db/timeline.db)",
+    )
     pp.set_defaults(func=cmd_parse)
 
     # ── summary ───────────────────────────────────────────────────
@@ -361,7 +411,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ps.add_argument(
         "--db", default=None, metavar="FILE",
-        help="SQLite DB 경로 (기본: ./timeline.db)",
+        help="SQLite DB 경로 (기본: db/timeline.db)",
     )
     ps.set_defaults(func=cmd_summary)
 

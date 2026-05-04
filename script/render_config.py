@@ -146,7 +146,8 @@ class RenderConfig:
     tile_cache_dir:   str   = "output/_tile_cache"   # 프로젝트 전역 타일 캐시 폴더
 
     # ── 잔상(trail) ─────────────────────────────
-    trail_len:        int   = 300
+    trail_len:        int   = 300        # 점 개수 기준 잔상 길이 (trail_time_sec=0 일 때 유효)
+    trail_time_sec:   float = 0.0        # 시간 기준 잔상 길이(초). 0=비활성 → trail_len 사용
     trail_alpha_min:  int   = 60
     trail_alpha_max:  int   = 255
     current_pt_scale: int   = 2
@@ -171,6 +172,11 @@ class RenderConfig:
         "unknown":    1,
         "vehicle":    3,
     })
+
+    # ── 정지 포인트 공간 압축 ────────────────────────────
+    compress_stationary_enabled:  bool  = False
+    compress_stationary_radius_m: float = 100.0   # 클러스터 반경(m)
+    compress_stationary_keep:     str   = "median" # 대표 선택: first / median / last
 
     # ── 이상치 필터 (정지 포인트의 GPS 노이즈 제거) ─────
     outlier_filter_enabled:  bool  = True
@@ -341,6 +347,7 @@ def load_config(config_path: Optional[Path] = None) -> RenderConfig:
     # trail 섹션
     t = raw.get("trail", {})
     if "length"               in t: cfg.trail_len        = int(t["length"])
+    if "time_sec"             in t: cfg.trail_time_sec   = parse_duration_str(t["time_sec"])
     if "alpha_min"            in t: cfg.trail_alpha_min  = int(t["alpha_min"])
     if "alpha_max"            in t: cfg.trail_alpha_max  = int(t["alpha_max"])
     if "current_point_scale"  in t: cfg.current_pt_scale = int(t["current_point_scale"])
@@ -356,6 +363,12 @@ def load_config(config_path: Optional[Path] = None) -> RenderConfig:
         cfg.activity_radius = {k: int(v) for k, v in raw["radius"].items()}
     if "line_width" in raw:
         cfg.line_widths = {k: int(v) for k, v in raw["line_width"].items()}
+
+    # compress_stationary 섹션
+    cs = raw.get("compress_stationary", {})
+    if "enabled"   in cs: cfg.compress_stationary_enabled  = bool(cs["enabled"])
+    if "radius_m"  in cs: cfg.compress_stationary_radius_m = float(cs["radius_m"])
+    if "keep"      in cs: cfg.compress_stationary_keep     = str(cs["keep"])
 
     # outlier 필터
     of = raw.get("outlier", {})

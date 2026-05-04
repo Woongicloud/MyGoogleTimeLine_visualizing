@@ -47,7 +47,7 @@ SPEED_THRESHOLDS = [
     (80.0, ActivityType.HIGHWAY),
 ]
 
-DB_PATH = Path("timeline.db")
+DB_PATH = Path("db/timeline.db")
 ACCURACY_FILTER_MM   = 500_000  # 500m 이상 부정확한 포인트 제외
 HAVERSINE_MAX_GAP_SEC = 300     # 5분 이상 이동 간격이면 속도 보간 스킵
 
@@ -212,7 +212,10 @@ def stream_place_aggregates(json_path: Path) -> Iterator[PlaceAggregate]:
 # ──────────────────────────────────────────
 
 def init_db(db_path: Path = DB_PATH) -> sqlite3.Connection:
-    """DB 초기화 — 테이블 생성 + 인덱스"""
+    """DB 초기화 — 테이블 생성 + 인덱스. db 디렉터리 자동 생성."""
+    db_path = Path(db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")   # 대용량 쓰기 최적화
     conn.execute("PRAGMA synchronous=NORMAL")
@@ -243,18 +246,21 @@ def init_db(db_path: Path = DB_PATH) -> sqlite3.Connection:
         );
 
         CREATE INDEX IF NOT EXISTS idx_gps_year_month ON gps_points(year, month);
-        CREATE INDEX IF NOT EXISTS idx_gps_timestamp  ON gps_points(timestamp);
         CREATE INDEX IF NOT EXISTS idx_gps_activity   ON gps_points(activity);
         CREATE INDEX IF NOT EXISTS idx_place_id       ON place_aggregates(place_id);
     """)
+    # timestamp 중복 삽입 방지 — 재파싱 시 기존 데이터 보존
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_gps_timestamp ON gps_points(timestamp)"
+    )
     conn.commit()
     return conn
 
 
 def bulk_insert_gps(conn: sqlite3.Connection, points: Iterator[GpsPoint], batch_size: int = 5000) -> int:
-    """GPS 포인트 배치 삽입 — 대용량 성능 최적화"""
+    """GPS 포인트 배치 삽입 — 대용량 성능 최적화. 이미 존재하는 timestamp는 건너뜀."""
     sql = """
-        INSERT INTO gps_points
+        INSERT OR IGNORE INTO gps_points
             (timestamp, lat, lng, accuracy_mm, altitude_m, speed_ms, source, activity, year, month)
         VALUES
             (:timestamp, :lat, :lng, :accuracy_mm, :altitude_m, :speed_ms, :source, :activity, :year, :month)
@@ -334,13 +340,13 @@ def get_summary(conn: sqlite3.Connection) -> dict:
 # 메인 실행
 # ──────────────────────────────────────────
 
-def run(json_path: str | Path) -> None:
+def run(json_path: str | Path, db_path: str | Path = DB_PATH) -> None:
     json_path = Path(json_path)
     if not json_path.exists():
         raise FileNotFoundError(f"파일 없음: {json_path}")
 
-    log.info("DB 초기화 중...")
-    conn = init_db()
+    log.info("DB 초기화 중... (%s)", db_path)
+    conn = init_db(Path(db_path))
 
     log.info("GPS 포인트 파싱 시작: %s", json_path)
     gps_total = bulk_insert_gps(conn, stream_gps_points(json_path))

@@ -227,6 +227,107 @@ def filter_outliers(track: list[dict], cfg: RenderConfig) -> list[dict]:
 
 
 # ──────────────────────────────────────────
+# 정지 포인트 공간 압축
+# ──────────────────────────────────────────
+
+def _cluster_center(pts: list[dict]) -> tuple[float, float]:
+    """클러스터 내 포인트들의 평균 위치 반환."""
+    lat = sum(p["lat"] for p in pts) / len(pts)
+    lng = sum(p["lng"] for p in pts) / len(pts)
+    return lat, lng
+
+
+def _pick_representative(pts: list[dict], keep: str) -> dict:
+    """
+    클러스터 대표 포인트 선택.
+
+    keep:
+      "first"  — 첫 번째 포인트 (도착 시각)
+      "last"   — 마지막 포인트 (출발 시각)
+      "median" — 중앙값 위치 (lat/lng 각각 정렬 후 중앙, GPS 노이즈에 강건)
+    """
+    if keep == "last":
+        return dict(pts[-1])
+    if keep == "median":
+        mid = len(pts) // 2
+        sorted_by_lat = sorted(pts, key=lambda p: p["lat"])
+        sorted_by_lng = sorted(pts, key=lambda p: p["lng"])
+        rep = dict(pts[0])
+        rep["lat"] = sorted_by_lat[mid]["lat"]
+        rep["lng"] = sorted_by_lng[mid]["lng"]
+        return rep
+    return dict(pts[0])  # "first" (기본)
+
+
+def compress_stationary(track: list[dict], cfg: RenderConfig) -> list[dict]:
+    """
+    연속 stationary 포인트를 공간 클러스터링으로 압축.
+
+    알고리즘:
+      1. track을 순회하면서 stationary 포인트가 연속될 때 클러스터에 누적.
+      2. 새 포인트가 현재 클러스터 중심에서 radius_m 이내 → 클러스터 추가.
+      3. radius_m 초과하거나 non-stationary 포인트 등장
+         → 현재 클러스터를 대표 1개로 flush 후 새 클러스터 시작.
+      4. 이동 구간(non-stationary)은 그대로 통과 — 동선 왜곡 없음.
+
+    Args:
+        track: GPS 포인트 리스트 (timestamp 순)
+        cfg:   RenderConfig (compress_stationary_* 필드 사용)
+
+    Returns:
+        압축된 새 트랙 리스트.
+    """
+    if not cfg.compress_stationary_enabled or len(track) < 2:
+        return track
+
+    radius_m = cfg.compress_stationary_radius_m
+    keep     = cfg.compress_stationary_keep
+
+    result:  list[dict] = []
+    cluster: list[dict] = []
+
+    def flush_cluster() -> None:
+        if not cluster:
+            return
+        if len(cluster) == 1:
+            result.append(dict(cluster[0]))
+        else:
+            result.append(_pick_representative(cluster, keep))
+        cluster.clear()
+
+    for pt in track:
+        act = (pt.get("activity") or "unknown")
+        if act != "stationary":
+            flush_cluster()
+            result.append(dict(pt))
+            continue
+
+        if not cluster:
+            cluster.append(pt)
+            continue
+
+        c_lat, c_lng = _cluster_center(cluster)
+        dist = _haversine_m(c_lat, c_lng, pt["lat"], pt["lng"])
+        if dist <= radius_m:
+            cluster.append(pt)
+        else:
+            flush_cluster()
+            cluster.append(pt)
+
+    flush_cluster()
+
+    n_before = len(track)
+    n_after  = len(result)
+    if n_before != n_after:
+        log.info(
+            "정지 포인트 압축: %d → %d 포인트 (radius=%.0fm, keep=%s, %.1f%% 감소)",
+            n_before, n_after, radius_m, keep,
+            (1 - n_after / max(n_before, 1)) * 100,
+        )
+    return result
+
+
+# ──────────────────────────────────────────
 # 이동수단 세분화 (subway / train / car / running 등 재분류)
 # ──────────────────────────────────────────
 
@@ -401,6 +502,33 @@ def downsample_by_time(track: list[dict], step_sec: float) -> list[dict]:
         (1 - len(new_track) / max(len(track), 1)) * 100,
     )
     return new_track
+
+
+# ──────────────────────────────────────────
+# Trail 시작 인덱스 계산 (개수 기준 / 시간 기준 공통 헬퍼)
+# ──────────────────────────────────────────
+
+def _trail_start(
+    pt_idx:       int,
+    track:        list[dict],
+    track_epochs: Optional[list[float]],
+    cfg:          RenderConfig,
+) -> int:
+    """
+    현재 프레임의 trail 시작 인덱스 반환.
+
+    cfg.trail_time_sec > 0:
+        현재 포인트 timestamp - trail_time_sec 이후의 첫 인덱스 (이진탐색 O(log n))
+    else:
+        현재 인덱스 - trail_len (점 개수 기준)
+    """
+    if cfg.trail_time_sec > 0 and track_epochs is not None:
+        import bisect
+        cur_ts    = track_epochs[pt_idx]
+        cutoff_ts = cur_ts - cfg.trail_time_sec
+        idx = bisect.bisect_left(track_epochs, cutoff_ts)
+        return max(0, min(idx, pt_idx))
+    return max(0, pt_idx - cfg.trail_len)
 
 
 # ──────────────────────────────────────────
@@ -931,6 +1059,7 @@ def render_frame(
     fractional_idx: float,                   # 정수가 아닌 부동소수점 인덱스 — 부드러운 애니메이션
     cfg           : RenderConfig,
     icons         : Optional[dict[str, Image.Image]] = None,
+    track_epochs  : Optional[list[float]] = None,    # 시간 기준 trail 용 사전 계산 epoch
 ) -> tuple[Image.Image, tuple[float, float, float, float], int]:
     """
     단일 프레임 렌더링 (타일 피라미드 + 적응형 줌 + 보간 head + 아이콘).
@@ -951,7 +1080,7 @@ def render_frame(
     pt_idx       = int(fractional_idx)
     seg_progress = fractional_idx - pt_idx       # 0.0 ~ 1.0
 
-    start   = max(0, pt_idx - cfg.trail_len)
+    start   = _trail_start(pt_idx, track, track_epochs, cfg)
     visible = track[start : pt_idx + 1]
 
     # head 위치 보간 (애니메이션 핵심)
@@ -1188,6 +1317,9 @@ def render_frames(
     # 이동수단 세분화 — vehicle/highway → car/bus/subway/train 재분류
     track = refine_transport_modes(track, cfg)
 
+    # 정지 포인트 공간 압축 — 반경 radius_m 이내 연속 stationary → 1개
+    track = compress_stationary(track, cfg)
+
     # ── realtime_speed 적용 — 데이터 시간 범위 기준 영상 길이 재계산 ─
     # (다운샘플링 *전* 시간 범위 사용: 사용자 의도는 원본 데이터 범위)
     if cfg.realtime_speed_sec > 0:
@@ -1265,6 +1397,12 @@ def render_frames(
         for i in range(total_frames)
     ]
 
+    # 시간 기준 trail 을 위한 epoch 사전 계산 (trail_time_sec > 0 일 때만)
+    track_epochs: Optional[list[float]] = None
+    if cfg.trail_time_sec > 0:
+        track_epochs = [_epoch_seconds(p) for p in track]
+        log.info("trail 모드: 시간 기준 %.0f초 (점 개수 무관)", cfg.trail_time_sec)
+
     # 아이콘 로드 (한 번)
     icons = load_icons(cfg)
 
@@ -1290,8 +1428,8 @@ def render_frames(
     for fp in fractional_indices:
         pt_idx       = int(fp)
         seg_progress = fp - pt_idx
-        start    = max(0, pt_idx - cfg.trail_len)
-        visible  = track[start : pt_idx + 1]
+        start        = _trail_start(pt_idx, track, track_epochs, cfg)
+        visible      = track[start : pt_idx + 1]
         if not visible:
             continue
 
@@ -1320,14 +1458,21 @@ def render_frames(
     tile_cache.prefetch(needed_tiles, parallel=cfg.prefetch_parallel)
 
     # ── 3단계: 프레임 렌더링 ──────────────────────────────────────
+    trail_desc = (
+        f"{cfg.trail_time_sec:.0f}s (시간 기준)"
+        if cfg.trail_time_sec > 0
+        else f"{cfg.trail_len}pt (개수 기준)"
+    )
     log.info(
-        "렌더링 시작: %d프레임 | %d초@%dfps | GPS %d건 | trail %d | lines=%s | icons=%d",
+        "렌더링 시작: %d프레임 | %d초@%dfps | GPS %d건 | trail %s | lines=%s | icons=%d",
         total_frames, cfg.duration_sec, cfg.fps,
-        n_points, cfg.trail_len, cfg.draw_lines, len(icons),
+        n_points, trail_desc, cfg.draw_lines, len(icons),
     )
 
     for frame_idx, fp in enumerate(fractional_indices):
-        img, _frame_bbox, _z = render_frame(tile_cache, track, fp, cfg, icons=icons)
+        img, _frame_bbox, _z = render_frame(
+            tile_cache, track, fp, cfg, icons=icons, track_epochs=track_epochs,
+        )
         # HUD 타임스탬프는 정수부 인덱스 기준
         ts = track[int(fp)]["timestamp"]
         img = draw_hud(img, ts, frame_idx, total_frames, cfg)

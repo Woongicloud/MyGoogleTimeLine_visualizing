@@ -1,0 +1,29 @@
+# Google Timeline Visualizer - Conda Environment
+# 환경 생성: conda env create -f environment.yml
+# 환경 활성화: conda activate mytimeline
+# 환경 업데이트: conda env update -f environment.yml --prune
+
+name: mytimeline
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  - pip
+
+  # pip으로 앱 의존성 설치 (phase1 + phase2 + phase3)
+  - pip:
+    # Phase 1 - JSON 스트리밍 파서
+    - ijson>=3.5.0
+
+    # Phase 2 - 프레임 렌더링
+    - Pillow>=10.0.0
+    - requests>=2.32.0
+    - python-dotenv>=1.0.0
+    - staticmap>=0.5.4
+    - PyYAML>=6.0
+
+    # Phase 3 - 비디오 인코딩 (FFmpeg 번들 포함)
+    - imageio-ffmpeg>=0.5.1
