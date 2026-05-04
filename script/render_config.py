@@ -108,8 +108,15 @@ class HudConfig:
     enabled:       bool             = True
     banner_height: int              = 38
     banner_alpha:  int              = 150
+    banner_color:  tuple            = (0, 0, 0)         # 배너 배경 RGB
     font_size:     int              = 20
     font_path:     str              = ""
+    # ── 날짜·시각 표시 제어 ────────────────────────
+    show_date:     bool             = True              # 날짜(YYYY-MM-DD) 표시
+    show_time:     bool             = True              # 시각(HH:MM:SS) 표시
+    show_seconds:  bool             = True              # 초(:SS) 표시 (show_time=True일 때)
+    text_color:    tuple            = (255, 255, 255)   # 텍스트 RGB
+    text_alpha:    int              = 255               # 텍스트 투명도 (0~255)
     progress_bar:  ProgressBarConfig = field(default_factory=ProgressBarConfig)
 
 
@@ -264,7 +271,7 @@ class RenderConfig:
     # ── 렌더링 기본값 ────────────────────────────
     duration_sec: int = 60
     fps:          int = 30
-    db_path:      str = "timeline.db"
+    db_path:      str = "db/timeline.db"
     output_root:  str = "output"
 
     # ── 재생 속도 / 데이터 다운샘플링 ─────────────
@@ -311,8 +318,12 @@ def load_config(config_path: Optional[Path] = None) -> RenderConfig:
     render_config.yml 로드. 파일 없으면 기본값 반환.
     개별 키만 덮어씀 — 누락된 키는 기본값 유지.
     """
-    cfg  = RenderConfig()
-    path = config_path or Path("render_config.yml")
+    cfg = RenderConfig()
+    if config_path is not None:
+        path = Path(config_path)
+    else:
+        # __file__ 기준 프로젝트 루트에서 탐색 — CWD에 무관
+        path = Path(__file__).resolve().parent.parent / "render_config.yml"
 
     if not path.exists():
         cfg.resolve_token()
@@ -399,8 +410,14 @@ def load_config(config_path: Optional[Path] = None) -> RenderConfig:
     if "enabled"       in h: cfg.hud.enabled       = bool(h["enabled"])
     if "banner_height" in h: cfg.hud.banner_height  = int(h["banner_height"])
     if "banner_alpha"  in h: cfg.hud.banner_alpha   = int(h["banner_alpha"])
+    if "banner_color"  in h: cfg.hud.banner_color   = tuple(h["banner_color"])
     if "font_size"     in h: cfg.hud.font_size       = int(h["font_size"])
     if "font_path"     in h: cfg.hud.font_path       = str(h["font_path"])
+    if "show_date"     in h: cfg.hud.show_date      = bool(h["show_date"])
+    if "show_time"     in h: cfg.hud.show_time      = bool(h["show_time"])
+    if "show_seconds"  in h: cfg.hud.show_seconds   = bool(h["show_seconds"])
+    if "text_color"    in h: cfg.hud.text_color     = tuple(h["text_color"])
+    if "text_alpha"    in h: cfg.hud.text_alpha     = int(h["text_alpha"])
     pb = h.get("progress_bar", {})
     if pb:
         hpb = cfg.hud.progress_bar

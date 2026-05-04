@@ -2,7 +2,7 @@
 Google Timeline Visualizer — Phase 2: 프레임 렌더러
 파일: frame_renderer.py
 
-입력 : timeline.db (Phase 1 출력) + 기간 파라미터
+입력 : db/timeline.db (Phase 1 출력) + 기간 파라미터
 출력 : output/<period>/frames/frame_XXXXXX.png
 
 기간 포맷:
@@ -42,6 +42,18 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+
+# 프로젝트 루트 — 상대 경로(db_path, output_root 등)를 CWD와 무관하게 해석하기 위한 기준점
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_path(p: str) -> Path:
+    """
+    설정값 경로 해석.
+    절대 경로면 그대로, 상대 경로면 프로젝트 루트 기준으로 변환.
+    """
+    path = Path(p)
+    return path if path.is_absolute() else _PROJECT_ROOT / path
 
 
 # ──────────────────────────────────────────
@@ -447,6 +459,7 @@ def refine_transport_modes(track: list[dict], cfg: RenderConfig) -> list[dict]:
     summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items(), key=lambda x: -x[1]))
     log.info("이동수단 세분화: %s", summary)
     return new_track
+
 
 
 # ──────────────────────────────────────────
@@ -1156,7 +1169,12 @@ def draw_hud(
     total     : int,
     cfg       : RenderConfig,
 ) -> Image.Image:
-    """상단 HUD 오버레이 (날짜·시각 + 진행 바). cfg.hud.enabled=false 이면 스킵."""
+    """
+    상단 HUD 오버레이 (날짜·시각 + 네비게이션 바).
+
+    cfg.hud.enabled=False → 전체 스킵.
+    날짜·시각·초 표시 여부, 텍스트/배경 색상·투명도 모두 HudConfig로 제어.
+    """
     if not cfg.hud.enabled:
         return img
 
@@ -1164,10 +1182,32 @@ def draw_hud(
     pb   = h.progress_bar
     draw = ImageDraw.Draw(img, "RGBA")
 
-    # 배너 배경
-    draw.rectangle([(0, 0), (cfg.map_w, h.banner_height)], fill=(0, 0, 0, h.banner_alpha))
+    # ── 배너 배경 (banner_color + banner_alpha) ─────────────────────────
+    draw.rectangle(
+        [(0, 0), (cfg.map_w, h.banner_height)],
+        fill=(*h.banner_color, h.banner_alpha),
+    )
 
-    # 날짜·시각 텍스트
+    # ── 날짜·시각 텍스트 ──────────────────────────────────────────────────
+    # timestamp 예: "2025-08-25T14:32:10+09:00" 또는 "2025-08-25T14:32:10Z"
+    raw_dt  = timestamp[:19]            # "2025-08-25T14:32:10"
+    parts   = raw_dt.split("T", 1)
+    date_part = parts[0]               # "2025-08-25"
+    time_part = parts[1] if len(parts) > 1 else ""  # "14:32:10"
+
+    # 초(:SS) 숨기기
+    if time_part and not h.show_seconds:
+        time_part = time_part[:5]      # "14:32"
+
+    # 표시할 파트 조합
+    shown: list[str] = []
+    if h.show_date and date_part:
+        shown.append(date_part)
+    if h.show_time and time_part:
+        shown.append(time_part)
+    dt_str = " ".join(shown)
+
+    # 폰트 로드 (캐싱 없음 — 프레임마다 호출되지만 PIL이 내부 캐싱함)
     font = None
     if h.font_path:
         try:
@@ -1182,11 +1222,15 @@ def draw_hud(
         except Exception:
             font = None
 
-    dt_str = timestamp[:19].replace("T", " ")
-    draw.text((12, (h.banner_height - h.font_size) // 2), dt_str,
-              fill=(255, 255, 255, 255), font=font)
+    if dt_str:
+        draw.text(
+            (12, (h.banner_height - h.font_size) // 2),
+            dt_str,
+            fill=(*h.text_color, h.text_alpha),
+            font=font,
+        )
 
-    # 진행 바
+    # ── 네비게이션 바 (진행 바) ─────────────────────────────────────────
     if pb.enabled:
         progress = frame_idx / max(total - 1, 1)
         bx0 = cfg.map_w - pb.margin_right - pb.width
@@ -1301,7 +1345,7 @@ def render_frames(
     log.info("기간: %s ~ %s", start, end)
     log.info("지도 공급자: %s", cfg.provider)
 
-    db = Path(cfg.db_path)
+    db = _resolve_path(cfg.db_path)
     if not db.exists():
         log.error("DB 없음: %s  →  먼저 파서를 실행하세요", db)
         log.error("  python script/timeline_parser.py <파일경로>")
@@ -1350,7 +1394,7 @@ def render_frames(
         track = downsample_by_time(track, cfg.time_step_sec)
 
     period_slug = period_str.replace("~", "_")
-    out_dir     = output_dir or Path(cfg.output_root) / period_slug / "frames"
+    out_dir     = output_dir or _resolve_path(cfg.output_root) / period_slug / "frames"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Google Drive 동기화 락 대기 — 쓰기 가능해질 때까지 (최대 60초)
@@ -1415,7 +1459,7 @@ def render_frames(
         log.info("검증 모드: 전체 bbox + zoom=%d", verify_zoom)
         # 검증은 사전 수집 없이 즉석 다운로드
         bg = composite_for_bbox(tile_cache, all_bbox, cfg.map_w * 2, cfg.map_h * 2, verify_zoom)
-        verify_path = Path(cfg.output_root) / period_slug / f"verify_{cfg.provider}.png"
+        verify_path = _resolve_path(cfg.output_root) / period_slug / f"verify_{cfg.provider}.png"
         render_verification_overlay(bg, all_bbox, verify_path)
         log.info("검증 모드 — 프레임 렌더링 생략. 이미지 확인 후 정확도 판정.")
         return

@@ -248,13 +248,39 @@ python script/frame_renderer.py 2025-12 \
 
 #### `hud` 섹션
 
-| 키 | 타입 | 기본값 | 설명 |
-|----|------|--------|------|
-| `enabled` | bool | `true` | HUD 전체 표시 여부 |
-| `banner_height` | int | `38` | 상단 배너 높이 (px) |
-| `banner_alpha` | int | `150` | 배너 배경 투명도 |
-| `font_size` | int | `20` | 날짜 텍스트 크기 (pt) |
-| `font_path` | string | `""` | 커스텀 폰트 파일 경로 |
+상단 HUD(날짜·시각 + 네비게이션 바)의 외관과 표시 내용을 제어합니다.
+
+**기본 설정**
+
+| 키 | 타입 | 기본값 | CLI 플래그 | 설명 |
+|----|------|--------|-----------|------|
+| `enabled` | bool | `true` | `--no-hud` | HUD 전체 표시 여부 |
+| `banner_height` | int | `38` | — | 상단 배너 높이 (px) |
+| `banner_alpha` | int | `150` | `--hud-alpha N` | 배너 배경 투명도 (0~255) |
+| `banner_color` | list | `[0,0,0]` | `--hud-color R,G,B` | 배너 배경 RGB 색상 |
+| `font_size` | int | `20` | — | 텍스트 크기 (pt) |
+| `font_path` | string | `""` | — | 커스텀 폰트 파일 절대 경로 |
+
+**날짜·시각 표시 제어**
+
+| 키 | 타입 | 기본값 | CLI 플래그 | 설명 |
+|----|------|--------|-----------|------|
+| `show_date` | bool | `true` | `--hud-date` / `--no-hud-date` | 날짜(YYYY-MM-DD) 표시 |
+| `show_time` | bool | `true` | `--hud-time` / `--no-hud-time` | 시각(HH:MM:SS) 표시 |
+| `show_seconds` | bool | `true` | `--hud-seconds` / `--no-hud-seconds` | 초(:SS) 표시 (`show_time=true`일 때) |
+| `text_color` | list | `[255,255,255]` | `--hud-text-color R,G,B` | 텍스트 RGB 색상 |
+| `text_alpha` | int | `255` | `--hud-text-alpha N` | 텍스트 투명도 (0~255) |
+
+**네비게이션 바(진행 바)**
+
+| 키 | 타입 | 기본값 | CLI 플래그 | 설명 |
+|----|------|--------|-----------|------|
+| `progress_bar.enabled` | bool | `true` | `--no-navbar` | 진행 바 표시 여부 |
+| `progress_bar.color` | list | `[99,202,255]` | — | 진행 바 채움 색 (RGB) |
+| `progress_bar.alpha` | int | `200` | — | 진행 바 투명도 |
+| `progress_bar.outline_color` | list | `[180,180,180]` | — | 진행 바 테두리 색 |
+| `progress_bar.width` | int | `200` | — | 진행 바 너비 (px) |
+| `progress_bar.height` | int | `16` | — | 진행 바 높이 (px) |
 
 #### `render` 섹션
 
@@ -263,27 +289,94 @@ python script/frame_renderer.py 2025-12 \
 | `duration_sec` | int | `60` | 기본 출력 영상 길이 (초) |
 | `fps` | int | `30` | 기본 프레임 레이트 |
 
+#### `compress_stationary` 섹션
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `enabled` | bool | `false` | 정지 포인트 공간 압축 활성화 |
+| `radius_m` | float | `100.0` | 클러스터 반경(m) — 이내 연속 정지점 → 1개로 압축 |
+| `keep` | string | `"median"` | 대표 포인트 선택: `first` / `median` / `last` |
+
+#### `playback` 섹션
+
+| 키 | 타입 | 기본값 | 설명 |
+|----|------|--------|------|
+| `speed` | float | `1.0` | 영상 속도 배율 (2.0 = 2배 빠름) |
+| `realtime_speed` | string | `"0"` | 영상 1초당 실제 시간 (예: `"1h"`) |
+| `time_step` | string | `"0"` | 시간 그리드 다운샘플링 (예: `"60s"`) |
+
 ---
 
 ## CLI 레퍼런스
 
+> **적용 우선순위:** CLI 플래그 > `render_config.yml` > 내장 기본값  
+> **API 키:** `.env` 파일 > `render_config.yml`
+
+```bash
+python main.py render <period> [옵션]
+python main.py pipeline <period> [--json FILE] [옵션]
 ```
-python script/frame_renderer.py <period> [옵션]
 
-인자:
-  period          기간 (예: 2025-12  또는  2025-12-20~2025-12-31)
+### 기본 렌더링 옵션
 
-옵션:
-  --map PROVIDER  지도 공급자 또는 커스텀 XYZ URL
-  --config FILE   설정 파일 경로 (기본: ./render_config.yml)
-  --output DIR    PNG 출력 폴더
-  --duration N    영상 길이 초 (CLI > render_config.yml > 내장 기본값 순)
-  --fps N         프레임 레이트
-  --trail N       잔상 최대 점 개수
+| 플래그 | 형식 | 기본값 | 설명 |
+|--------|------|--------|------|
+| `--map` | `PROVIDER` | `cartodb-voyager` | 지도 공급자 또는 커스텀 XYZ URL |
+| `--config` | `FILE` | `render_config.yml` | 설정 파일 경로 |
+| `--duration` | `N` | `60` | 영상 길이(초) |
+| `--fps` | `N` | `30` | 프레임 레이트 |
+| `--trail` | `N` | `300` | 잔상 최대 점 개수 (개수 기준) |
+| `--trail-time` | `DUR` | — | 잔상 시간 기준 (예: `5m`, `300s`) |
+| `--speed` | `N` | `1.0` | 영상 속도 배율 |
+| `--realtime-speed` | `DUR` | — | 영상 1초당 실제 시간 (예: `1h`) |
+| `--time-step` | `DUR` | — | 시간 그리드 다운샘플링 (예: `60s`) |
 
-적용 우선순위:
-  CLI 플래그 > render_config.yml > 내장 기본값
-  API 키: .env 파일 > render_config.yml
+### 정지 포인트 압축 옵션
+
+| 플래그 | 형식 | 기본값 | 설명 |
+|--------|------|--------|------|
+| `--compress-stationary` | flag | off | 정지 포인트 공간 압축 활성화 |
+| `--compress-radius` | `M` | `100` | 압축 반경(m) |
+
+### HUD 옵션
+
+| 플래그 | 형식 | 기본값 | 설명 |
+|--------|------|--------|------|
+| `--no-hud` | flag | — | HUD 전체 숨김 |
+| `--hud-date` / `--no-hud-date` | bool | 표시 | 날짜(YYYY-MM-DD) 표시 |
+| `--hud-time` / `--no-hud-time` | bool | 표시 | 시각(HH:MM:SS) 표시 |
+| `--hud-seconds` / `--no-hud-seconds` | bool | 표시 | 초(:SS) 표시 |
+| `--no-navbar` | flag | — | 네비게이션 바(진행 바) 숨김 |
+| `--hud-alpha` | `N` | `150` | 배너 배경 투명도 (0~255) |
+| `--hud-color` | `R,G,B` | `0,0,0` | 배너 배경 색상 |
+| `--hud-text-color` | `R,G,B` | `255,255,255` | 텍스트 색상 |
+| `--hud-text-alpha` | `N` | `255` | 텍스트 투명도 (0~255) |
+
+### HUD 사용 예시
+
+```bash
+# HUD 전체 제거
+python main.py render 2026-03 --no-hud
+
+# 날짜만 표시 (시각 숨김)
+python main.py render 2026-03 --no-hud-time
+
+# 시분만 표시 (초 숨김)
+python main.py render 2026-03 --no-hud-seconds
+
+# 네비게이션 바 없이 날짜·시각만
+python main.py render 2026-03 --no-navbar
+
+# 반투명 남색 배너 + 노란 텍스트
+python main.py render 2026-03 \
+  --hud-color "20,20,60" --hud-alpha 180 \
+  --hud-text-color "255,220,80"
+
+# 완전 투명 배너 (텍스트만 지도 위에 떠 있는 효과)
+python main.py render 2026-03 --hud-alpha 0
+
+# 시각 없이 날짜만 + 네비게이션 바 유지
+python main.py render 2026-03 --no-hud-time
 ```
 
 ---
@@ -317,8 +410,36 @@ trail:
 ### HUD 비활성화
 
 ```yaml
+# render_config.yml
 hud:
   enabled: false
+```
+
+또는 CLI:
+
+```bash
+python main.py render 2026-03 --no-hud
+```
+
+### HUD 날짜만 표시 (시각 숨김)
+
+```bash
+python main.py render 2026-03 --no-hud-time
+```
+
+또는 `render_config.yml`:
+
+```yaml
+hud:
+  show_time: false
+```
+
+### 반투명 남색 배너 + 노란 텍스트
+
+```bash
+python main.py render 2026-03 \
+  --hud-color "20,20,60" --hud-alpha 180 \
+  --hud-text-color "255,220,80"
 ```
 
 ---

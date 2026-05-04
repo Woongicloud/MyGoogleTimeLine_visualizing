@@ -47,7 +47,9 @@ SPEED_THRESHOLDS = [
     (80.0, ActivityType.HIGHWAY),
 ]
 
-DB_PATH = Path("db/timeline.db")
+# 스크립트 위치(script/) 기준으로 프로젝트 루트의 db/ 디렉터리를 가리킴
+# → CWD에 무관하게 항상 올바른 경로 사용
+DB_PATH = Path(__file__).resolve().parent.parent / "db" / "timeline.db"
 ACCURACY_FILTER_MM   = 500_000  # 500m 이상 부정확한 포인트 제외
 HAVERSINE_MAX_GAP_SEC = 300     # 5분 이상 이동 간격이면 속도 보간 스킵
 

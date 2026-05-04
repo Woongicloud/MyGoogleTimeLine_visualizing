@@ -85,6 +85,25 @@ def cmd_summary(args: argparse.Namespace) -> None:
     conn.close()
 
 
+def _parse_rgb(value: str, flag: str) -> tuple[int, int, int]:
+    """
+    'R,G,B' 형식 문자열을 (R, G, B) 정수 튜플로 변환.
+    범위(0~255) 벗어나거나 파싱 실패 시 에러 후 종료.
+    """
+    try:
+        parts = [int(x.strip()) for x in value.split(",")]
+    except ValueError:
+        log.error("%s 값이 올바르지 않습니다: %r  (형식: 'R,G,B'  예: '255,128,0')", flag, value)
+        sys.exit(1)
+    if len(parts) != 3:
+        log.error("%s 는 세 값(R,G,B)이어야 합니다: %r", flag, value)
+        sys.exit(1)
+    if any(not (0 <= v <= 255) for v in parts):
+        log.error("%s 값은 0~255 범위여야 합니다: %r", flag, value)
+        sys.exit(1)
+    return (parts[0], parts[1], parts[2])
+
+
 def _apply_render_overrides(cfg: RenderConfig, args: argparse.Namespace) -> RenderConfig:
     """CLI 인자로 RenderConfig 필드 덮어씀 (None이 아닐 때만)"""
     if getattr(args, "map", None):
@@ -139,6 +158,48 @@ def _apply_render_overrides(cfg: RenderConfig, args: argparse.Namespace) -> Rend
         except ValueError as e:
             log.error("--time-step 파싱 실패: %s", e)
             sys.exit(1)
+
+    # ── HUD 옵션 오버라이드 ──────────────────────────────────────────────────
+    # HUD 전체 on/off
+    if getattr(args, "no_hud", False):
+        cfg.hud.enabled = False
+
+    # 날짜·시각·초 표시
+    hud_date = getattr(args, "hud_date", None)
+    if hud_date is not None:
+        cfg.hud.show_date = hud_date
+    hud_time = getattr(args, "hud_time", None)
+    if hud_time is not None:
+        cfg.hud.show_time = hud_time
+    hud_seconds = getattr(args, "hud_seconds", None)
+    if hud_seconds is not None:
+        cfg.hud.show_seconds = hud_seconds
+
+    # 네비게이션 바(진행 바)
+    if getattr(args, "no_navbar", False):
+        cfg.hud.progress_bar.enabled = False
+
+    # 배너 배경 투명도·색상
+    hud_alpha = getattr(args, "hud_alpha", None)
+    if hud_alpha is not None:
+        if not (0 <= hud_alpha <= 255):
+            log.error("--hud-alpha 는 0~255 범위여야 합니다: %s", hud_alpha)
+            sys.exit(1)
+        cfg.hud.banner_alpha = hud_alpha
+    hud_color = getattr(args, "hud_color", None)
+    if hud_color is not None:
+        cfg.hud.banner_color = _parse_rgb(hud_color, "--hud-color")
+
+    # 텍스트 색상·투명도
+    hud_text_color = getattr(args, "hud_text_color", None)
+    if hud_text_color is not None:
+        cfg.hud.text_color = _parse_rgb(hud_text_color, "--hud-text-color")
+    hud_text_alpha = getattr(args, "hud_text_alpha", None)
+    if hud_text_alpha is not None:
+        if not (0 <= hud_text_alpha <= 255):
+            log.error("--hud-text-alpha 는 0~255 범위여야 합니다: %s", hud_text_alpha)
+            sys.exit(1)
+        cfg.hud.text_alpha = hud_text_alpha
 
     return cfg
 
@@ -310,6 +371,84 @@ def _add_render_args(p: argparse.ArgumentParser, include_period: bool = True) ->
             "정지 포인트 압축 반경(m) (기본: 100)\n"
             "  · --compress-stationary 와 함께 사용\n"
             "  · 예: --compress-radius 50  (더 작은 클러스터로 압축)"
+        ),
+    )
+
+    # ── HUD 옵션 ─────────────────────────────────────────────────────────────
+    p.add_argument(
+        "--no-hud", dest="no_hud",
+        action="store_true", default=False,
+        help="HUD 전체 숨김 (날짜·시각 + 네비게이션 바 모두 제거)",
+    )
+    p.add_argument(
+        "--hud-date", dest="hud_date",
+        action=argparse.BooleanOptionalAction, default=None,
+        help=(
+            "날짜(YYYY-MM-DD) 표시 여부 (기본: 표시)\n"
+            "  · --hud-date     → 표시 (기본)\n"
+            "  · --no-hud-date  → 숨김"
+        ),
+    )
+    p.add_argument(
+        "--hud-time", dest="hud_time",
+        action=argparse.BooleanOptionalAction, default=None,
+        help=(
+            "시각(HH:MM 또는 HH:MM:SS) 표시 여부 (기본: 표시)\n"
+            "  · --hud-time     → 표시 (기본)\n"
+            "  · --no-hud-time  → 숨김"
+        ),
+    )
+    p.add_argument(
+        "--hud-seconds", dest="hud_seconds",
+        action=argparse.BooleanOptionalAction, default=None,
+        help=(
+            "시각에서 초(:SS) 표시 여부 (기본: 표시)\n"
+            "  · --hud-seconds     → HH:MM:SS (기본)\n"
+            "  · --no-hud-seconds  → HH:MM 만 표시\n"
+            "  · --hud-time 이 켜진 경우에만 유효"
+        ),
+    )
+    p.add_argument(
+        "--no-navbar", dest="no_navbar",
+        action="store_true", default=False,
+        help="우측 상단 네비게이션 바(진행 바) 숨김",
+    )
+    p.add_argument(
+        "--hud-alpha", dest="hud_alpha",
+        type=int, default=None, metavar="N",
+        help=(
+            "배너 배경 투명도 0~255 (기본: 150)\n"
+            "  · 0   = 완전 투명 (배너 안 보임)\n"
+            "  · 150 = 반투명 (기본)\n"
+            "  · 255 = 불투명"
+        ),
+    )
+    p.add_argument(
+        "--hud-color", dest="hud_color",
+        default=None, metavar="R,G,B",
+        help=(
+            "배너 배경 RGB 색상 (기본: '0,0,0')\n"
+            "  · 예: --hud-color '0,0,0'      (검정, 기본)\n"
+            "  · 예: --hud-color '30,30,60'   (남색 계열)\n"
+            "  · 예: --hud-color '255,255,255' (흰색)"
+        ),
+    )
+    p.add_argument(
+        "--hud-text-color", dest="hud_text_color",
+        default=None, metavar="R,G,B",
+        help=(
+            "날짜·시각 텍스트 RGB 색상 (기본: '255,255,255')\n"
+            "  · 예: --hud-text-color '255,255,255' (흰색, 기본)\n"
+            "  · 예: --hud-text-color '255,220,100' (노란색 계열)"
+        ),
+    )
+    p.add_argument(
+        "--hud-text-alpha", dest="hud_text_alpha",
+        type=int, default=None, metavar="N",
+        help=(
+            "날짜·시각 텍스트 투명도 0~255 (기본: 255)\n"
+            "  · 0   = 완전 투명\n"
+            "  · 255 = 불투명 (기본)"
         ),
     )
 

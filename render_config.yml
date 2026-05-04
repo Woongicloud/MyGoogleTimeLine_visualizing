@@ -23,8 +23,8 @@ map:
 
 # ── 출력 해상도 ───────────────────────────────────────────────────────────────
 canvas:
-  width:  1280              # 가로 픽셀 (권장: 1280 / 1920)
-  height:  720              # 세로 픽셀 (권장: 720 / 1080)
+  width:  1080              # 가로 픽셀 (권장: 1280 / 1920)
+  height:  1350              # 세로 픽셀 (권장: 720 / 1080)
   bbox_padding:      0.10   # 프레임 뷰포트 여백 비율 (10%)
   bbox_min_padding_deg: 0.005  # 최소 여백 (도)
 
@@ -176,13 +176,24 @@ icon:
     unknown:    walking
     vehicle:    car          # 하위 호환
 
-# ── HUD (날짜/시각 + 진행 바) ─────────────────────────────────────────────────
+# ── HUD (날짜/시각 + 네비게이션 바) ──────────────────────────────────────────
 hud:
-  enabled:       true    # false 로 설정하면 HUD 전체 숨김
+  enabled:       true    # false → HUD 전체 숨김 (CLI: --no-hud)
   banner_height: 38      # 상단 배너 높이 (px)
-  banner_alpha:  150     # 배너 배경 투명도 (0~255)
+  banner_alpha:  150     # 배너 배경 투명도 (0~255) (CLI: --hud-alpha)
+  banner_color:  [0, 0, 0]        # 배너 배경 RGB 색상 (CLI: --hud-color R,G,B)
   font_size:     20      # 텍스트 크기 (pt)
   font_path:     ""      # 폰트 파일 절대 경로 (비우면 arial.ttf 또는 기본 폰트)
+
+  # ── 날짜·시각 표시 제어 ─────────────────────────────────────────────────────
+  show_date:     true    # 날짜(YYYY-MM-DD) 표시 (CLI: --hud-date / --no-hud-date)
+  show_time:     true    # 시각(HH:MM:SS) 표시 (CLI: --hud-time / --no-hud-time)
+  show_seconds:  true    # 초(:SS) 표시 — show_time=true일 때만 유효
+                         # (CLI: --hud-seconds / --no-hud-seconds)
+
+  # ── 텍스트 스타일 ────────────────────────────────────────────────────────────
+  text_color:    [255, 255, 255]  # 텍스트 RGB 색상 (CLI: --hud-text-color R,G,B)
+  text_alpha:    255              # 텍스트 투명도 0~255 (CLI: --hud-text-alpha)
 
   progress_bar:
     enabled:       true
@@ -199,7 +210,7 @@ hud:
 render:
   duration_sec: 60   # 기본 출력 영상 길이 (초) — CLI --duration 으로 덮어씀
   fps:          30   # 기본 프레임 레이트 — CLI --fps 로 덮어씀
-  db_path:      "db/timeline.db"   # SQLite DB 경로
+  db_path:      "db/timeline_recovered.db"   # SQLite DB 경로 (복구본 — 원본 교체 후 timeline.db로 되돌릴 것)
   output_root:  "output"        # PNG 시퀀스 출력 루트 폴더
 
 # ── 재생 속도 / 데이터 다운샘플링 ────────────────────────────────────────────
